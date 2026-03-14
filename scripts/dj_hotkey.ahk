@@ -1,7 +1,7 @@
 ﻿#Requires AutoHotkey v2.0
 #SingleInstance Force
 
-DJ_PATH := "C:\Users\mariu\SpotifyDJ\dj_input.txt"
+DJ_PATH := "C:\Users\mariu\SpotifyDJ\data\dj_input.txt"
 
 SendDJ(value)
 {

@@ -31,7 +31,10 @@ SCOPE = "user-modify-playback-state user-read-playback-state"
 AUTO_INTERVAL = 900
 SMOOTH_THRESHOLD = 8000
 
-MEMORY_FILE = "data/dj_memory.json"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+MEMORY_FILE = os.path.join(BASE_DIR, "data", "dj_memory.json")
+INPUT_FILE = os.path.join(BASE_DIR, "data", "dj_input.txt")
 MEMORY_VERSION = 1
 
 current_pool = None
@@ -301,12 +304,12 @@ def run_dj():
 
     while True:
 
-        if os.path.exists("dj_input.txt"):
+        if os.path.exists(INPUT_FILE):
 
-            with open("dj_input.txt") as f:
-                choice=f.read().strip()
+            with open(INPUT_FILE) as f:
+                choice = f.read().strip()
 
-            os.remove("dj_input.txt")
+            os.remove(INPUT_FILE)
 
             last_auto_switch=time.time()
 
@@ -361,7 +364,9 @@ while True:
 
     except Exception:
 
-        with open("data/dj_crash.log","a",encoding="utf-8") as log:
+        CRASH_LOG = os.path.join(BASE_DIR, "data", "dj_crash.log")
+
+        with open(CRASH_LOG,"a",encoding="utf-8") as log:
             log.write(
                 f"\n\n[{datetime.datetime.now()}]\n"
             )

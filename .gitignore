@@ -1,0 +1,19 @@
+# secrets
+.env
+
+# runtime data
+data/
+dj_input.txt
+
+# cache
+.cache
+__pycache__/
+
+# logs
+*.log
+
+# venv
+venv/
+
+# python cache
+*.pyc

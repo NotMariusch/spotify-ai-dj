@@ -16,7 +16,7 @@ Personal autonomous Spotify DJ that learns listening behavior and plays music au
 F13 + 1 → Hype  
 F13 + 2 → German trap  
 F13 + 3 → KPOP 
-F13 + 4 → Anime  
+F13 + 4 → JPOP 
 F13 + 5 → Global AI DJ
 
 ## Setup

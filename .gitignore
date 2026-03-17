@@ -9,6 +9,7 @@ data/discovered_artists.json
 data/dj.lock
 data/dj_input.txt
 data/dj_crash.log
+data/banned_tracks.json
 
 # Keep the data folder itself in the repo
 !data/.gitkeep

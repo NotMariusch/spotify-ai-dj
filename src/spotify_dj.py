@@ -39,6 +39,7 @@ CACHE_FILE         = os.path.join(BASE_DIR, "data", "track_cache.json")
 DISCOVERED_FILE    = os.path.join(BASE_DIR, "data", "discovered_artists.json")
 RECENT_FILE        = os.path.join(BASE_DIR, "data", "recent_tracks.json")
 LOCK_FILE          = os.path.join(BASE_DIR, "data", "dj.lock")
+BANNED_FILE        = os.path.join(BASE_DIR, "data", "banned_tracks.json")
 CACHE_TTL_DAYS     = 7
 
 MEMORY_VERSION = 1
@@ -139,6 +140,70 @@ def save_recent():
 load_recent()
 
 # =====================
+# BAN SYSTEM
+# =====================
+
+banned_track_ids = set()
+
+def load_banned():
+    """Load banned track IDs from disk into the in-memory set."""
+    global banned_track_ids
+    if os.path.exists(BANNED_FILE):
+        try:
+            with open(BANNED_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            banned_track_ids = set(data.get("track_ids", []))
+            print(f"  Loaded {len(banned_track_ids)} banned track(s).")
+        except Exception:
+            banned_track_ids = set()
+
+def save_banned():
+    with open(BANNED_FILE, "w", encoding="utf-8") as f:
+        json.dump({"track_ids": list(banned_track_ids)}, f, indent=2)
+
+def ban_current_track():
+    """
+    Ban whatever is currently playing:
+    1. Look up the current track via Spotify API
+    2. Add its ID to banned_track_ids and save
+    3. Apply a weight penalty to the artist
+    4. Skip to the next track immediately
+    """
+    try:
+        pb = sp.current_playback()
+        if not pb or not pb.get("item"):
+            print("  Ban: nothing is currently playing.")
+            return
+
+        track    = pb["item"]
+        track_id = track["id"]
+        name     = track["name"]
+
+        if track_id in banned_track_ids:
+            print(f"  Ban: '{name}' is already banned.")
+        else:
+            banned_track_ids.add(track_id)
+            save_banned()
+            print(f"  Banned: '{name}' (ID: {track_id})")
+
+        # Weight penalty — banning is a stronger dislike signal than just skipping
+        artist = now_playing.get("artist")
+        mode   = now_playing.get("mode")
+        if artist and mode:
+            update_weight(artist, mode, WEIGHT_PUNISH)
+
+        # Skip immediately — play next track in current mode
+        if auto_mode == "global":
+            play_global_mix(interrupted=True)
+        elif current_pool:
+            play_from_pool(current_pool, auto_mode, interrupted=True)
+
+    except Exception as e:
+        print(f"  Ban failed: {e}")
+
+load_banned()
+
+# =====================
 # INSTANCE LOCK
 # =====================
 
@@ -198,7 +263,7 @@ ARTISTS = {
     "YOASOBI":       "64tJ2EAv1R6UaZqc4iOCyj",
     "Kenshi Yonezu": "4UK2Lzi6fBfUi9rpDt6cik",
     "BABYMETAL":     "630wzNP2OL7fl4Xl0GnMWq",
-    "LiSA":          "0blbVefuxOGltDBa00dspv",
+    "Aimer":         "0bAsR2unSRpn6BQPEnNlZm",
     "Joji":          "6jJ0s89eD6GaHleKKya26X",
     "The Weeknd":    "1Xyo4u8uXC1ZmMpatF05PJ",
 }
@@ -206,7 +271,7 @@ ARTISTS = {
 HYPE_POOL  = ["Juice WRLD", "XXXTENTACION", "Ski Mask", "A Boogie"]
 TJ_POOL    = ["tj_beastboy", "Sierra Kidd"]
 KPOP_POOL  = ["LE SSERAFIM", "BLACKPINK", "NewJeans", "K/DA", "aespa"]
-ANIME_POOL = ["Ado", "YOASOBI", "Kenshi Yonezu", "BABYMETAL", "LiSA"]
+ANIME_POOL = ["Ado", "YOASOBI", "Kenshi Yonezu", "BABYMETAL", "Aimer"]
 
 GLOBAL_POOL = list(ARTISTS.keys())
 
@@ -775,6 +840,9 @@ def play_artist(name, mode, pool=None, _depth=0, interrupted=True):
         tracks = [t for t in tracks if normalize_title(t["name"]) not in recent_titles]
         print(f"  after recent filter: {len(tracks)}")
 
+        tracks = [t for t in tracks if t.get("id") not in banned_track_ids]
+        print(f"  after ban filter: {len(tracks)}")
+
         if not tracks:
             raise Exception("No tracks left after filtering")
 
@@ -865,7 +933,10 @@ def run_dj():
 
             last_auto_switch = time.time()
 
-            if choice == "1":
+            if choice == "ban":
+                ban_current_track()
+
+            elif choice == "1":
                 auto_mode    = "hype"
                 current_pool = HYPE_POOL
                 play_from_pool(current_pool, "hype", interrupted=True)

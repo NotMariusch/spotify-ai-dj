@@ -4,10 +4,12 @@ import json
 import random
 import traceback
 import datetime
+import re
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from dotenv import load_dotenv
 from pathlib import Path
+from collections import deque
 
 # =====================
 # SPOTIFY CONFIG
@@ -16,96 +18,207 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
+CLIENT_ID     = os.getenv("SPOTIFY_CLIENT_ID")
 CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
-REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI")
+REDIRECT_URI  = os.getenv("SPOTIFY_REDIRECT_URI")
 
 SCOPE = "user-modify-playback-state user-read-playback-state"
-
 
 # =====================
 # SETTINGS
 # =====================
 
-AUTO_INTERVAL = 900
-SMOOTH_THRESHOLD = 8000
+AUTO_INTERVAL    = 900   # seconds between automatic track switches
+SMOOTH_THRESHOLD = 8000  # ms remaining before a smooth transition fires
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-MEMORY_FILE = os.path.join(BASE_DIR, "data", "dj_memory.json")
-INPUT_FILE = os.path.join(BASE_DIR, "data", "dj_input.txt")
+MEMORY_FILE        = os.path.join(BASE_DIR, "data", "dj_memory.json")
+INPUT_FILE         = os.path.join(BASE_DIR, "data", "dj_input.txt")
+CACHE_FILE         = os.path.join(BASE_DIR, "data", "track_cache.json")
+DISCOVERED_FILE    = os.path.join(BASE_DIR, "data", "discovered_artists.json")
+RECENT_FILE        = os.path.join(BASE_DIR, "data", "recent_tracks.json")
+LOCK_FILE          = os.path.join(BASE_DIR, "data", "dj.lock")
+CACHE_TTL_DAYS     = 7
+
 MEMORY_VERSION = 1
 
-current_pool = None
-auto_mode = None
+current_pool     = None
+auto_mode        = None
 last_auto_switch = time.time()
 
+# Rate limit reduction: check playback every 30s instead of every 5s.
+# 30s = 120 API calls/hour vs 720/hour. Still plenty responsive.
+PLAYBACK_CHECK_INTERVAL = 30
+last_playback_check     = 0.0
+
+# Tracks what's currently playing so we can judge it when the next track starts.
+now_playing = {
+    "artist":   None,  # artist name string
+    "mode":     None,  # mode string ("hype", "kpop", etc.)
+    "duration": 0,     # track duration_ms
+    "started":  0.0,   # time.time() when playback started
+}
+
+track_disk_cache = {}
+
+# =====================
+# DISK CACHE
+# =====================
+
+def load_track_cache():
+    global track_disk_cache
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                track_disk_cache = json.load(f)
+        except Exception:
+            track_disk_cache = {}
+
+def save_track_cache():
+    with open(CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(track_disk_cache, f, indent=2)
+
+load_track_cache()
+
+# =====================
+# FILTER SETTINGS
+# =====================
+
+TRACK_KEYWORDS_WORD = [
+    "remix", "live", "edit", "clean", "demo", "acoustic",
+    "instrumental", "karaoke", "nightcore", "extended",
+    "censored", "remaster", "remastered", "reverb",
+]
+
+TRACK_KEYWORDS_SUBSTR = [
+    "sped up", "sped-up", "speed up", "spedup",
+    "slowed reverb", "slowed",
+    "radio edit",
+]
+
+ALBUM_KEYWORDS_WORD = [
+    "tour", "concert", "arena", "stadium", "festival", "anniversary",
+]
+
+LANGUAGE_VERSION_PATTERN = re.compile(
+    r"(japanese|english|chinese|mandarin|spanish|french|german|thai|vietnamese)"
+    r"\s*(ver\.?|version|edit)",
+    re.IGNORECASE
+)
+
+ALBUM_KEYWORDS_SUBSTR = [
+    "tokyo dome",
+    "world tour",
+]
+
+recent_titles  = deque(maxlen=30)
+recent_artists = deque(maxlen=10)
+
+def load_recent():
+    """Restore recent_titles from disk so repeats are avoided across restarts."""
+    if os.path.exists(RECENT_FILE):
+        try:
+            with open(RECENT_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for t in data.get("titles", []):
+                recent_titles.append(t)
+            for a in data.get("artists", []):
+                recent_artists.append(a)
+        except Exception:
+            pass  # corrupt file — start fresh, not a big deal
+
+def save_recent():
+    """Persist recent_titles to disk."""
+    with open(RECENT_FILE, "w", encoding="utf-8") as f:
+        json.dump({
+            "titles":  list(recent_titles),
+            "artists": list(recent_artists),
+        }, f)
+
+load_recent()
+
+# =====================
+# INSTANCE LOCK
+# =====================
+
+def acquire_lock():
+    """
+    Write our PID to the lock file. If a lock file already exists and the
+    PID in it belongs to a running process, exit immediately so we don't
+    run two instances at once.
+    """
+    import sys
+    if os.path.exists(LOCK_FILE):
+        try:
+            with open(LOCK_FILE, "r") as f:
+                existing_pid = int(f.read().strip())
+            # Check if that process is still alive
+            import ctypes
+            handle = ctypes.windll.kernel32.OpenProcess(0x0400, False, existing_pid)
+            if handle:
+                ctypes.windll.kernel32.CloseHandle(handle)
+                print(f"DJ is already running (PID {existing_pid}). Exiting.")
+                sys.exit(0)
+        except Exception:
+            pass  # stale or unreadable lock — safe to overwrite
+
+    with open(LOCK_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
+def release_lock():
+    """Remove the lock file on clean exit."""
+    try:
+        if os.path.exists(LOCK_FILE):
+            os.remove(LOCK_FILE)
+    except Exception:
+        pass
+
+import atexit
+acquire_lock()
+atexit.register(release_lock)
 
 # =====================
 # ARTISTS
 # =====================
 
 ARTISTS = {
-    # US RAP
-    "Juice WRLD": "4MCBfE4596Uoi2O4DtmEMz",
-    "XXXTENTACION": "15UsOTVnJzReFVN1VCnxy4",
-    "Ski Mask": "2rhFzFmezpnW82MNqEKVry",
-    "A Boogie": "31W5EY0aAly4Qieq6OFu6I",
-
-    # GERMAN
-    "tj_beastboy": "7l8dcABCTyZKrkskt53Z2u",
-    "Sierra Kidd": "0U7ti3mwGrBNlKNE4YlbfT",
-
-    # KPOP
-    "LE SSERAFIM": "4SpbR6yFEvexJuaBpgAU5p",
-    "BLACKPINK": "41MozSoPIsD1dJM0CLPjZF",
-    "NewJeans": "6HvZYsbFfjnjFrWF950C9d",
-    "K/DA": "4gOc8TsQed9eqnqJct2c5v",
-    "aespa": "6YVMFz59CuY7ngCxTxjpxE",
-
-    # ANIME / JAPAN
-    "Ado": "6mEQK9m2krja6X1cfsAjfl",
-    "YOASOBI": "64tJ2EAv1R6UaZqc4iOCyj",
+    "Juice WRLD":    "4MCBfE4596Uoi2O4DtmEMz",
+    "XXXTENTACION":  "15UsOTVnJzReFVN1VCnxy4",
+    "Ski Mask":      "2rhFzFmezpnW82MNqEKVry",
+    "A Boogie":      "31W5EY0aAly4Qieq6OFu6I",
+    "tj_beastboy":   "7l8dcABCTyZKrkskt53Z2u",
+    "Sierra Kidd":   "0U7ti3mwGrBNlKNE4YlbfT",
+    "LE SSERAFIM":   "4SpbR6yFEvexJuaBpgAU5p",
+    "BLACKPINK":     "41MozSoPIsD1dJM0CLPjZF",
+    "NewJeans":      "6HvZYsbFfjnjFrWF950C9d",
+    "K/DA":          "4gOc8TsQed9eqnqJct2c5v",
+    "aespa":         "6YVMFz59CuY7ngCxTxjpxE",
+    "Ado":           "6mEQK9m2krja6X1cfsAjfl",
+    "YOASOBI":       "64tJ2EAv1R6UaZqc4iOCyj",
     "Kenshi Yonezu": "4UK2Lzi6fBfUi9rpDt6cik",
-    "BABYMETAL": "630wzNP2OL7fl4Xl0GnMWq",
-    "LiSA": "0blbVefuxOGltDBa00dspv",
-
-    # GLOBAL SUPPORT
-    "Joji": "6jJ0s89eD6GaHleKKya26X",
-    "The Weeknd": "1Xyo4u8uXC1ZmMpatF05PJ"
+    "BABYMETAL":     "630wzNP2OL7fl4Xl0GnMWq",
+    "LiSA":          "0blbVefuxOGltDBa00dspv",
+    "Joji":          "6jJ0s89eD6GaHleKKya26X",
+    "The Weeknd":    "1Xyo4u8uXC1ZmMpatF05PJ",
 }
 
-
-HYPE_POOL = [
-    "Juice WRLD",
-    "XXXTENTACION",
-    "Ski Mask",
-    "A Boogie"
-]
-
-TJ_POOL = [
-    "tj_beastboy",
-    "Sierra Kidd"
-]
-
-KPOP_POOL = [
-    "LE SSERAFIM",
-    "BLACKPINK",
-    "NewJeans",
-    "K/DA",
-    "aespa"
-]
-
-ANIME_POOL = [
-    "Ado",
-    "YOASOBI",
-    "Kenshi Yonezu",
-    "BABYMETAL",
-    "LiSA"
-]
+HYPE_POOL  = ["Juice WRLD", "XXXTENTACION", "Ski Mask", "A Boogie"]
+TJ_POOL    = ["tj_beastboy", "Sierra Kidd"]
+KPOP_POOL  = ["LE SSERAFIM", "BLACKPINK", "NewJeans", "K/DA", "aespa"]
+ANIME_POOL = ["Ado", "YOASOBI", "Kenshi Yonezu", "BABYMETAL", "LiSA"]
 
 GLOBAL_POOL = list(ARTISTS.keys())
 
+# Pool lookup by mode name — used by the discovery system to know
+# which pool to add a graduated artist into.
+MODE_POOLS = {
+    "hype":   HYPE_POOL,
+    "tj":     TJ_POOL,
+    "kpop":   KPOP_POOL,
+    "anime":  ANIME_POOL,
+    "global": GLOBAL_POOL,
+}
 
 # =====================
 # MEMORY SYSTEM
@@ -115,60 +228,292 @@ def default_memory():
     return {
         "version": MEMORY_VERSION,
         "modes": {
-            "hype": {},
-            "tj": {},
-            "night": {},
-            "anime": {},
-            "global": {}
+            "hype":   {},
+            "tj":     {},
+            "night":  {},
+            "anime":  {},
+            "global": {},
+            "kpop":   {},
         }
     }
 
-
 def upgrade_memory(data):
-
     if "version" not in data:
         return default_memory()
-
     if data["version"] < MEMORY_VERSION:
         print("Upgrading DJ memory...")
         data["version"] = MEMORY_VERSION
-
     return data
 
-
 def save_memory(mem):
-    with open(MEMORY_FILE,"w",encoding="utf-8") as f:
-        json.dump(mem,f,indent=2)
-
+    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(mem, f, indent=2)
 
 def load_memory():
-
     if not os.path.exists(MEMORY_FILE):
         mem = default_memory()
         save_memory(mem)
         return mem
-
     try:
-        with open(MEMORY_FILE,"r",encoding="utf-8") as f:
-            data=json.load(f)
-
-        data=upgrade_memory(data)
+        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        data = upgrade_memory(data)
         save_memory(data)
         return data
-
     except Exception:
-        print("Memory corrupted → rebuilding")
-        mem=default_memory()
+        print("Memory corrupted, rebuilding...")
+        mem = default_memory()
         save_memory(mem)
         return mem
 
-
 memory = load_memory()
 
-
 def get_mode_memory(mode):
-    return memory["modes"].setdefault(mode,{})
+    return memory["modes"].setdefault(mode, {})
 
+# =====================
+# WEIGHT SYSTEM
+# =====================
+
+WEIGHT_BOOST  =  0.15  # reward for playing 80%+ of a track
+WEIGHT_PUNISH = -0.10  # penalty for switching away in first 25%
+WEIGHT_MAX    =  3.0   # ceiling — stops one artist dominating forever
+WEIGHT_MIN    =  0.2   # floor — keeps every artist in the rotation
+
+# Weight threshold that triggers a discovery search for a mode
+DISCOVERY_TRIGGER_WEIGHT = 2.0
+
+def update_weight(artist, mode, delta):
+    weights = get_mode_memory(mode)
+    current = weights.get(artist, 1.0)
+    updated = max(WEIGHT_MIN, min(WEIGHT_MAX, current + delta))
+    weights[artist] = round(updated, 3)
+    save_memory(memory)
+    print(f"  weight [{mode}] {artist}: {current:.3f} -> {updated:.3f}")
+
+    # Check if this boost pushed the artist past the discovery threshold
+    if delta > 0 and updated >= DISCOVERY_TRIGGER_WEIGHT:
+        queue_discovery(artist, mode)
+
+def judge_last_track(interrupted=False):
+    """
+    Called before every new track starts. Judges whether the previous
+    track counts as completed or cut short, and updates weights.
+
+    interrupted=True  — caller knows it was cut short (manual mode switch)
+    interrupted=False — use time-based judgement (auto-transition)
+    """
+    artist = now_playing["artist"]
+    mode   = now_playing["mode"]
+
+    if not artist or not mode:
+        return
+
+    if interrupted:
+        update_weight(artist, mode, WEIGHT_PUNISH)
+        return
+
+    duration = now_playing["duration"]
+    if duration == 0:
+        update_weight(artist, mode, WEIGHT_BOOST * 0.5)
+        return
+
+    elapsed_ms = (time.time() - now_playing["started"]) * 1000
+    fraction   = elapsed_ms / duration
+
+    if fraction >= 0.80:
+        update_weight(artist, mode, WEIGHT_BOOST)
+    elif fraction < 0.25:
+        update_weight(artist, mode, WEIGHT_PUNISH)
+    # 25–80%: ambiguous, no change
+
+def set_now_playing(artist, mode, duration_ms):
+    now_playing["artist"]   = artist
+    now_playing["mode"]     = mode
+    now_playing["duration"] = duration_ms
+    now_playing["started"]  = time.time()
+
+# =====================
+# DISCOVERY SYSTEM
+# =====================
+
+# Pending discoveries: list of (seed_artist, mode) tuples to process
+# at the next track boundary so we never interrupt playback.
+_discovery_queue = []
+
+# How many clean tracks a candidate needs to pass the quality bar
+DISCOVERY_MIN_TRACKS = 5
+
+# Trial plays needed before an artist graduates to permanent
+TRIAL_GRADUATION = 5
+
+def load_discovered():
+    """
+    Load discovered_artists.json.
+    Structure:
+    {
+      "artist_name": {
+        "id":          "spotify_artist_id",
+        "mode":        "kpop",
+        "trial_plays": 3,
+        "graduated":   false
+      },
+      ...
+    }
+    """
+    if not os.path.exists(DISCOVERED_FILE):
+        return {}
+    try:
+        with open(DISCOVERED_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_discovered(data):
+    with open(DISCOVERED_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+discovered_artists = load_discovered()
+
+def all_known_ids():
+    """Return a set of all artist IDs we already know about (permanent + discovered)."""
+    ids = set(ARTISTS.values())
+    for entry in discovered_artists.values():
+        ids.add(entry["id"])
+    return ids
+
+def inject_discovered_into_pools():
+    """
+    At startup, add any previously discovered (including graduated) artists
+    into the live pools and ARTISTS dict so they work like normal artists.
+    """
+    for name, entry in discovered_artists.items():
+        if name not in ARTISTS:
+            ARTISTS[name] = entry["id"]
+        mode = entry.get("mode", "global")
+        pool = MODE_POOLS.get(mode, GLOBAL_POOL)
+        if name not in pool:
+            pool.append(name)
+        if name not in GLOBAL_POOL:
+            GLOBAL_POOL.append(name)
+    print(f"  Loaded {len(discovered_artists)} discovered artist(s) into pools.")
+
+def queue_discovery(seed_artist, mode):
+    """Queue a discovery search to run at the next track boundary."""
+    entry = (seed_artist, mode)
+    if entry not in _discovery_queue:
+        print(f"  Discovery queued: find artists similar to {seed_artist} for [{mode}]")
+        _discovery_queue.append(entry)
+
+def run_pending_discoveries():
+    """
+    Process one queued discovery per call so we don't stall playback.
+    Called at each track boundary before the new track starts.
+    """
+    if not _discovery_queue:
+        return
+    seed_artist, mode = _discovery_queue.pop(0)
+    try:
+        discover_new_artist(seed_artist, mode)
+    except Exception as e:
+        print(f"  Discovery error: {e}")
+
+def discover_new_artist(seed_artist, mode):
+    """
+    Use Spotify recommendations seeded from seed_artist to find a new
+    artist we don't already know, verify they have enough clean tracks,
+    and add them to the discovered pool for trial.
+    """
+    seed_id = ARTISTS.get(seed_artist) or discovered_artists.get(seed_artist, {}).get("id")
+    if not seed_id:
+        print(f"  Discovery: can't find ID for {seed_artist}, skipping.")
+        return
+
+    known_ids = all_known_ids()
+
+    print(f"  Discovery: searching for artists similar to {seed_artist}...")
+
+    results = sp.recommendations(
+        seed_artists=[seed_id],
+        limit=50,
+        market="DE"
+    )
+
+    # Collect candidate artists from recommendation results,
+    # skipping anyone we already know.
+    candidates = {}
+    for track in results.get("tracks", []):
+        for artist in track.get("artists", []):
+            a_id   = artist["id"]
+            a_name = artist["name"]
+            if a_id not in known_ids and a_name not in candidates:
+                candidates[a_name] = a_id
+
+    if not candidates:
+        print(f"  Discovery: no new candidates found for {seed_artist}.")
+        return
+
+    # Shuffle candidates so we don't always pick the most popular one
+    candidate_list = list(candidates.items())
+    random.shuffle(candidate_list)
+
+    for name, artist_id in candidate_list:
+        print(f"  Discovery: trying candidate '{name}'...")
+        tracks = fetch_artist_tracks_by_id(name, artist_id)
+        filtered = select_best_tracks(tracks)
+
+        if len(filtered) < DISCOVERY_MIN_TRACKS:
+            print(f"    Only {len(filtered)} clean tracks, skipping.")
+            continue
+
+        # Candidate passes — add to discovered pool
+        discovered_artists[name] = {
+            "id":          artist_id,
+            "mode":        mode,
+            "trial_plays": 0,
+            "graduated":   False,
+        }
+        save_discovered(discovered_artists)
+
+        # Add to live pools immediately so they can be picked
+        ARTISTS[name] = artist_id
+        pool = MODE_POOLS.get(mode, GLOBAL_POOL)
+        if name not in pool:
+            pool.append(name)
+        if name not in GLOBAL_POOL:
+            GLOBAL_POOL.append(name)
+
+        # Initialise weight at 1.0 in the mode memory
+        weights = get_mode_memory(mode)
+        weights.setdefault(name, 1.0)
+        save_memory(memory)
+
+        print(f"  Discovery: added '{name}' to [{mode}] pool for trial "
+              f"({len(filtered)} clean tracks).")
+        return
+
+    print(f"  Discovery: all candidates failed quality check for {seed_artist}.")
+
+def record_trial_play(artist):
+    """
+    Called when a discovered (non-graduated) artist's track plays through 80%+.
+    Increments trial_plays and graduates the artist if the threshold is reached.
+    """
+    if artist not in discovered_artists:
+        return
+    entry = discovered_artists[artist]
+    if entry.get("graduated"):
+        return
+
+    entry["trial_plays"] += 1
+    print(f"  Trial play {entry['trial_plays']}/{TRIAL_GRADUATION} for '{artist}'")
+
+    if entry["trial_plays"] >= TRIAL_GRADUATION:
+        entry["graduated"] = True
+        save_discovered(discovered_artists)
+        print(f"  '{artist}' has GRADUATED — permanently added to [{entry['mode']}] pool.")
+    else:
+        save_discovered(discovered_artists)
 
 # =====================
 # SPOTIFY CONNECT
@@ -183,175 +528,382 @@ def connect():
             scope=SCOPE
         )
     )
-
-    device_id = sp.devices()["devices"][0]["id"]
-    return sp, device_id
-
+    for attempt in range(5):
+        devices = sp.devices().get("devices", [])
+        if devices:
+            return sp, devices[0]["id"]
+        print(f"No active Spotify device found (attempt {attempt + 1}/5). "
+              f"Open Spotify and start playing something, then wait...")
+        time.sleep(10)
+    raise RuntimeError(
+        "Could not find an active Spotify device after 5 attempts. "
+        "Make sure Spotify is open on at least one device."
+    )
 
 sp, device_id = connect()
 
+# =====================
+# DEBUG MODE
+#
+# Windows CMD:        set DJ_DEBUG=1 && python spotify_dj.py
+# Windows PowerShell: $env:DJ_DEBUG="1"; python spotify_dj.py
+# =====================
+
+DEBUG_MODE = os.getenv("DJ_DEBUG", "0") == "1"
 
 def safe_play(**kwargs):
+    if DEBUG_MODE:
+        print(f"[DEBUG] Would play: {kwargs}")
+        return
+
     global sp, device_id
 
     try:
         sp.start_playback(device_id=device_id, **kwargs)
-    except:
+    except spotipy.exceptions.SpotifyException as e:
+        if e.http_status == 429:
+            wait = int(e.headers.get("Retry-After", 30))
+            print(f"Rate limit hit in safe_play. Waiting {wait}s...")
+            time.sleep(wait)
+            return
+        print(f"Playback error ({e.http_status}), reconnecting...")
         sp, device_id = connect()
         sp.start_playback(device_id=device_id, **kwargs)
 
+# =====================
+# FILTER FUNCTIONS
+# =====================
+
+def is_alternate_version(track):
+    track_text = track["name"].lower()
+    track_text = track_text.replace("–", "-").replace("_", " ").replace(".", " ")
+    track_text = " ".join(track_text.split())
+
+    album_text = track["album"]["name"].lower()
+    album_text = album_text.replace("–", "-").replace("_", " ").replace(".", " ")
+    album_text = " ".join(album_text.split())
+
+    if LANGUAGE_VERSION_PATTERN.search(track["name"]):
+        return True
+    for kw in TRACK_KEYWORDS_WORD:
+        if re.search(rf"\b{re.escape(kw)}\b", track_text):
+            return True
+    for kw in TRACK_KEYWORDS_SUBSTR:
+        if kw in track_text:
+            return True
+    for kw in ALBUM_KEYWORDS_WORD:
+        if re.search(rf"\b{re.escape(kw)}\b", album_text):
+            return True
+    for kw in ALBUM_KEYWORDS_SUBSTR:
+        if kw in album_text:
+            return True
+    return False
+
+def normalize_title(title):
+    title = title.lower()
+    title = re.sub(r"\(.*?\)", "", title)
+    title = re.sub(r"\[.*?\]", "", title)
+    title = title.split("-")[0]
+    return title.strip()
 
 # =====================
 # SELECTION LOGIC
 # =====================
 
 def weighted_choice(pool, mode):
-
     weights = get_mode_memory(mode)
-
-    total = 0
-    scored = []
-
-    for artist in pool:
-        w = weights.get(artist,1.0)
-        scored.append((artist,w))
-        total += w
-
-    r=random.uniform(0,total)
-    upto=0
-
-    for artist,w in scored:
-        if upto+w>=r:
+    scored  = [(a, weights.get(a, 1.0)) for a in pool]
+    total   = sum(w for _, w in scored)
+    r       = random.uniform(0, total)
+    upto    = 0
+    for artist, w in scored:
+        upto += w
+        if upto >= r:
             return artist
-        upto+=w
+    return pool[-1]
 
+# =====================
+# TRACK FETCHING + CACHE
+# =====================
+
+artist_cache = {}
+
+def fetch_artist_tracks_by_id(artist_name, artist_id):
+    """
+    Fetch tracks for any artist given their name and Spotify ID.
+    Used by both get_artist_tracks (permanent artists) and the
+    discovery system (candidates we don't have in ARTISTS yet).
+    Results are cached to disk the same way as permanent artists.
+    """
+    # Check disk cache first
+    entry = track_disk_cache.get(artist_name)
+    if entry:
+        age_days = (time.time() - entry["fetched_at"]) / 86400
+        if age_days < CACHE_TTL_DAYS:
+            return entry["tracks"]
+
+    if artist_name in artist_cache:
+        return artist_cache[artist_name]
+
+    tracks = []
+    seen   = set()
+
+    try:
+        response = sp._get(
+            f"artists/{artist_id}/albums",
+            params={
+                "market":         "DE",
+                "include_groups": "album,single",
+                "limit":          50,
+            }
+        )
+        for album in response.get("items", []):
+            if album["id"] in seen:
+                continue
+            seen.add(album["id"])
+            for t in sp.album_tracks(album["id"], limit=50)["items"]:
+                t["album"] = album
+                t.setdefault("popularity", 0)
+                t.setdefault("explicit", False)
+                tracks.append(t)
+
+        artist_cache[artist_name] = tracks
+        track_disk_cache[artist_name] = {
+            "fetched_at": time.time(),
+            "tracks":     tracks,
+        }
+        save_track_cache()
+        return tracks
+
+    except spotipy.exceptions.SpotifyException as e:
+        if e.http_status == 429:
+            wait = int(e.headers.get("Retry-After", 30))
+            print(f"Rate limit hit fetching {artist_name}. Waiting {wait}s.")
+            time.sleep(wait)
+            return []
+        print(f"Track fetch failed for {artist_name}: {e}")
+        return []
+
+def get_artist_tracks(artist_name):
+    """Fetch tracks for a permanent artist (looks up ID from ARTISTS dict)."""
+    artist_id = ARTISTS[artist_name]
+    return fetch_artist_tracks_by_id(artist_name, artist_id)
+
+# =====================
+# PREWARM CACHE
+# =====================
+
+def prewarm_cache(artist_names, delay=2.0):
+    """
+    Fetch and cache all artists at startup. After this runs,
+    get_artist_tracks() makes zero API calls for 7 days.
+    """
+    print("Pre-warming track cache...")
+    for name in artist_names:
+        entry = track_disk_cache.get(name)
+        if entry:
+            age_days = (time.time() - entry["fetched_at"]) / 86400
+            if age_days < CACHE_TTL_DAYS:
+                print(f"  ✓ {name} (cached)")
+                continue
+        print(f"  Fetching {name}...")
+        get_artist_tracks(name)
+        time.sleep(delay)
+    print("Cache ready.\n")
+
+# =====================
+# TRACK SELECTION
+# =====================
+
+def select_best_tracks(tracks):
+    grouped = {}
+    for t in tracks:
+        if t["album"]["album_type"] in ["compilation", "appears_on"]:
+            continue
+        if any(w in t["album"]["name"].lower() for w in [
+            "tour", "live", "concert", "arena", "dome", "stadium", "festival"
+        ]):
+            continue
+        if is_alternate_version(t):
+            continue
+
+        title     = normalize_title(t["name"])
+        score_new = (1 if t.get("explicit", False) else 0) * 3 \
+                  + (1 if t["album"]["album_type"] == "single" else 0) * 2 \
+                  + t.get("popularity", 0)
+
+        if title not in grouped:
+            grouped[title] = (t, score_new)
+            continue
+
+        _, score_old = grouped[title]
+        if score_new > score_old:
+            grouped[title] = (t, score_new)
+
+    return [t for t, _ in grouped.values() if not is_alternate_version(t)]
 
 # =====================
 # PLAY FUNCTIONS
 # =====================
 
-def play_artist(name,mode):
+def play_artist(name, mode, pool=None, _depth=0, interrupted=True):
+    max_depth = len(pool) if pool else 1
+    if _depth >= max_depth:
+        print("  All artists in pool exhausted, skipping this cycle.")
+        return
 
-    artist_id = ARTISTS[name]
+    # Before doing anything else, judge the previous track and
+    # process any pending discovery searches.
+    if _depth == 0:
+        judge_last_track(interrupted=interrupted)
+        run_pending_discoveries()
 
-    print(f"DJ → {name}")
-
-    safe_play(context_uri=f"spotify:artist:{artist_id}")
-
-
-def play_from_pool(pool,mode):
-
-    artist = weighted_choice(pool,mode)
-    play_artist(artist,mode)
-
-
-def play_global_mix():
-
-    mode="global"
-
-    artist = weighted_choice(GLOBAL_POOL,mode)
-    artist_id = ARTISTS[artist]
-
-    print(f"Global DJ → {artist}")
+    print(f"DJ -> {name}")
+    time.sleep(1)
 
     try:
-        recs = sp.recommendations(
-            seed_artists=[artist_id],
-            limit=40
-        )
+        tracks = get_artist_tracks(name)
+        print(f"  fetched: {len(tracks)}")
 
-        tracks=[t["uri"] for t in recs["tracks"]]
+        tracks = select_best_tracks(tracks)
+        print(f"  after filter: {len(tracks)}")
+
+        # Note: explicit preference is already handled in select_best_tracks()
+        # scoring (+3 points). Filtering the whole pool to explicit-only here
+        # breaks artists like BLACKPINK who rarely release explicit tracks.
+
+        tracks = [t for t in tracks if normalize_title(t["name"]) not in recent_titles]
+        print(f"  after recent filter: {len(tracks)}")
 
         if not tracks:
-            raise Exception()
+            raise Exception("No tracks left after filtering")
 
-        safe_play(uris=tracks)
+        chosen = random.choice(tracks)
+        recent_titles.append(normalize_title(chosen["name"]))
+        recent_artists.append(chosen["artists"][0]["name"])
+        save_recent()
 
-    except:
-        print("Fallback → Artist Radio")
-        play_artist(artist,mode)
+        safe_play(uris=[chosen["uri"]])
 
+        # Record what's now playing for weight judgement next time
+        set_now_playing(
+            artist      = name,
+            mode        = mode,
+            duration_ms = chosen.get("duration_ms", 0),
+        )
+
+        # If this is a trial artist, check if they earned a trial play
+        # (We check fraction >= 0.80 lazily on next track via judge_last_track,
+        # so here we just hook into that via a flag in now_playing)
+        now_playing["is_trial"] = (
+            name in discovered_artists and
+            not discovered_artists[name].get("graduated", False)
+        )
+
+        # Pre-load next track into queue for hardware skip button
+        remaining = [t for t in tracks if t["uri"] != chosen["uri"]]
+        if remaining and not DEBUG_MODE:
+            try:
+                queued = random.choice(remaining)
+                sp.add_to_queue(queued["uri"], device_id=device_id)
+                print(f"  queued next: {queued['name']}")
+            except Exception:
+                pass
+
+    except Exception as e:
+        print(f"  play_artist failed: {e}")
+        if pool:
+            candidates = [a for a in pool if a != name]
+            if candidates:
+                play_artist(random.choice(candidates), mode, pool,
+                            _depth=_depth + 1, interrupted=False)
+        else:
+            time.sleep(2)
+
+def play_from_pool(pool, mode, interrupted=True):
+    play_artist(weighted_choice(pool, mode), mode, pool, interrupted=interrupted)
+
+def play_global_mix(interrupted=True):
+    artist = weighted_choice(GLOBAL_POOL, "global")
+    print(f"Global DJ -> {artist}")
+    play_artist(artist, "global", GLOBAL_POOL, interrupted=interrupted)
 
 # =====================
 # TRANSITION CHECK
 # =====================
 
 def ready_for_transition():
-
+    global last_playback_check
+    if time.time() - last_playback_check < PLAYBACK_CHECK_INTERVAL:
+        return False
+    last_playback_check = time.time()
     try:
         pb = sp.current_playback()
-
         if not pb or not pb["is_playing"]:
             return False
-
         remaining = pb["item"]["duration_ms"] - pb["progress_ms"]
-
         return remaining < SMOOTH_THRESHOLD
-
     except Exception:
-        # Spotify temporarily unreachable
         return False
-
 
 # =====================
 # MAIN DJ LOOP
 # =====================
 
 def run_dj():
-
-    global current_pool,auto_mode,last_auto_switch
+    global current_pool, auto_mode, last_auto_switch
 
     while True:
-
         if os.path.exists(INPUT_FILE):
+            try:
+                with open(INPUT_FILE) as f:
+                    choice = f.read().strip()
+                os.remove(INPUT_FILE)
+            except Exception:
+                time.sleep(1)
+                continue
 
-            with open(INPUT_FILE) as f:
-                choice = f.read().strip()
+            last_auto_switch = time.time()
 
-            os.remove(INPUT_FILE)
+            if choice == "1":
+                auto_mode    = "hype"
+                current_pool = HYPE_POOL
+                play_from_pool(current_pool, "hype", interrupted=True)
+            elif choice == "2":
+                auto_mode    = "tj"
+                current_pool = TJ_POOL
+                play_from_pool(current_pool, "tj", interrupted=True)
+            elif choice == "3":
+                auto_mode    = "kpop"
+                current_pool = KPOP_POOL
+                play_from_pool(current_pool, "kpop", interrupted=True)
+            elif choice == "4":
+                auto_mode    = "anime"
+                current_pool = ANIME_POOL
+                play_from_pool(current_pool, "anime", interrupted=True)
+            elif choice == "5":
+                auto_mode = "global"
+                play_global_mix(interrupted=True)
 
-            last_auto_switch=time.time()
-
-            if choice=="1":
-                auto_mode="hype"
-                current_pool=HYPE_POOL
-                play_from_pool(current_pool,"hype")
-
-            elif choice=="2":
-                auto_mode="tj"
-                current_pool=TJ_POOL
-                play_from_pool(current_pool,"tj")
-
-            elif choice=="3":
-                auto_mode="kpop"
-                current_pool=KPOP_POOL
-                play_from_pool(current_pool,"kpop")
-
-            elif choice=="4":
-                auto_mode="anime"
-                current_pool=ANIME_POOL
-                play_from_pool(current_pool,"anime")
-
-            elif choice=="5":
-                auto_mode="global"
-                play_global_mix()
-
-        if time.time()-last_auto_switch>AUTO_INTERVAL:
-
+        if time.time() - last_auto_switch > AUTO_INTERVAL:
             if ready_for_transition():
-
                 print("Smooth DJ transition")
-
-                if auto_mode=="global":
-                    play_global_mix()
-
+                if auto_mode == "global":
+                    play_global_mix(interrupted=False)
                 elif current_pool:
-                    play_from_pool(current_pool,auto_mode)
-
-                last_auto_switch=time.time()
+                    play_from_pool(current_pool, auto_mode, interrupted=False)
+                last_auto_switch = time.time()
 
         time.sleep(5)
 
+# =====================
+# STARTUP
+# =====================
+
+# Load previously discovered artists into pools before prewarming,
+# so their tracks get cached alongside permanent artists.
+inject_discovered_into_pools()
+prewarm_cache(GLOBAL_POOL)
 
 # =====================
 # CRASH SAFE RUNNER
@@ -360,15 +912,9 @@ def run_dj():
 while True:
     try:
         run_dj()
-
     except Exception:
-
         CRASH_LOG = os.path.join(BASE_DIR, "data", "dj_crash.log")
-
-        with open(CRASH_LOG,"a",encoding="utf-8") as log:
-            log.write(
-                f"\n\n[{datetime.datetime.now()}]\n"
-            )
+        with open(CRASH_LOG, "a", encoding="utf-8") as log:
+            log.write(f"\n\n[{datetime.datetime.now()}]\n")
             log.write(traceback.format_exc())
-
         time.sleep(5)

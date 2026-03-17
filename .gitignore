@@ -1,19 +1,28 @@
-# secrets
+# ── Secrets ───────────────────────────────────────────────────────────────────
 .env
 
-# runtime data
-data/
-dj_input.txt
+# ── Runtime data (auto-generated, should never be committed) ──────────────────
+data/track_cache.json
+data/dj_memory.json
+data/recent_tracks.json
+data/discovered_artists.json
+data/dj.lock
+data/dj_input.txt
+data/dj_crash.log
 
-# cache
-.cache
+# Keep the data folder itself in the repo
+!data/.gitkeep
+
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
-
-# logs
-*.log
-
-# venv
+*.py[cod]
+*.pyo
+.venv/
 venv/
+*.egg-info/
+.cache
 
-# python cache
-*.pyc
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1030,11 +1030,10 @@ def run_dj():
 
             elif choice == "skip":
                 print("Skip hotkey -- playing next track.")
-                judge_last_track(interrupted=True)
                 if auto_mode == "global":
-                    play_global_mix(interrupted=False)
+                    play_global_mix(interrupted=True)
                 elif current_pool:
-                    play_from_pool(current_pool, auto_mode, interrupted=False)
+                    play_from_pool(current_pool, auto_mode, interrupted=True)
 
             elif choice == "ban":
                 ban_current_track()

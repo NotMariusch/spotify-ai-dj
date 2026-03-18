@@ -17,6 +17,7 @@ SpotifyDJ/
 │   ├── discovered_artists.json  # Trial and graduated discovered artists
 │   ├── dj.lock                  # Instance lock file (prevents duplicate processes)
 │   ├── dj_input.txt             # Hotkey input (written by AHK, read by DJ)
+│   ├── banned_tracks.json       # Permanently banned track IDs
 │   └── dj_crash.log             # Crash and exit log
 ├── start_dj.bat                 # Launch with visible console (for testing)
 ├── start_dj_hidden.vbs          # Launch hidden in background (normal use)

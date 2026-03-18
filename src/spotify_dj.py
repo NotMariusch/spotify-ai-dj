@@ -28,8 +28,8 @@ SCOPE = "user-modify-playback-state user-read-playback-state"
 # SETTINGS
 # =====================
 
-AUTO_INTERVAL    = 900   # seconds between automatic track switches
-SMOOTH_THRESHOLD = 8000  # ms remaining before a smooth transition fires
+# AUTO_INTERVAL and SMOOTH_THRESHOLD removed -- smooth transition replaced
+# by track_finished() which resumes immediately when a track ends naturally.
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -44,19 +44,13 @@ CACHE_TTL_DAYS     = 7
 
 MEMORY_VERSION = 1
 
-current_pool     = None
-auto_mode        = None
-last_auto_switch = time.time()
-
-# Rate limit reduction: check playback every 30s instead of every 5s.
-# 30s = 120 API calls/hour vs 720/hour. Still plenty responsive.
-PLAYBACK_CHECK_INTERVAL = 30
-last_playback_check     = 0.0
+current_pool = None
+auto_mode    = None
 
 # Tracks what's currently playing so we can judge it when the next track starts.
 now_playing = {
     "artist":      None,   # artist name string
-    "mode":        None,   # mode string ("hype", "kpop", etc.)
+    "mode":        None,   # mode string ("american_rap", "kpop", etc.)
     "duration":    0,      # track duration_ms
     "started":     0.0,    # time.time() when playback started
     "ends_at":     9e18,   # time.time() when track is expected to end naturally
@@ -284,21 +278,21 @@ ARTISTS = {
     "The Weeknd":    "1Xyo4u8uXC1ZmMpatF05PJ",
 }
 
-HYPE_POOL  = ["Juice WRLD", "XXXTENTACION", "Ski Mask", "A Boogie"]
-TJ_POOL    = ["tj_beastboy", "Sierra Kidd"]
-KPOP_POOL  = ["LE SSERAFIM", "BLACKPINK", "NewJeans", "K/DA", "aespa"]
-ANIME_POOL = ["Ado", "YOASOBI", "Kenshi Yonezu", "BABYMETAL", "Aimer"]
+AMERICAN_RAP_POOL = ["Juice WRLD", "XXXTENTACION", "Ski Mask", "A Boogie"]
+GERMAN_TRAP_POOL  = ["tj_beastboy", "Sierra Kidd"]
+KPOP_POOL         = ["LE SSERAFIM", "BLACKPINK", "NewJeans", "K/DA", "aespa"]
+JPOP_POOL         = ["Ado", "YOASOBI", "Kenshi Yonezu", "BABYMETAL", "Aimer"]
 
 GLOBAL_POOL = list(ARTISTS.keys())
 
 # Pool lookup by mode name — used by the discovery system to know
 # which pool to add a graduated artist into.
 MODE_POOLS = {
-    "hype":   HYPE_POOL,
-    "tj":     TJ_POOL,
-    "kpop":   KPOP_POOL,
-    "anime":  ANIME_POOL,
-    "global": GLOBAL_POOL,
+    "american_rap": AMERICAN_RAP_POOL,
+    "german_trap":  GERMAN_TRAP_POOL,
+    "kpop":         KPOP_POOL,
+    "jpop":         JPOP_POOL,
+    "global":       GLOBAL_POOL,
 }
 
 # =====================
@@ -309,12 +303,11 @@ def default_memory():
     return {
         "version": MEMORY_VERSION,
         "modes": {
-            "hype":   {},
-            "tj":     {},
-            "night":  {},
-            "anime":  {},
-            "global": {},
-            "kpop":   {},
+            "american_rap":  {},
+            "german_trap":   {},
+            "kpop":          {},
+            "jpop":          {},
+            "global":        {},
         }
     }
 
@@ -409,6 +402,8 @@ def judge_last_track(interrupted=False):
 
     if fraction >= 0.80:
         update_weight(artist, mode, WEIGHT_BOOST)
+        if now_playing.get("is_trial"):
+            record_trial_play(artist)
     elif fraction < 0.25:
         update_weight(artist, mode, WEIGHT_PUNISH)
     # 25–80%: ambiguous, no change
@@ -656,6 +651,7 @@ def safe_play(**kwargs):
             wait = int(e.headers.get("Retry-After", 30))
             print(f"Rate limit hit in safe_play. Waiting {wait}s...")
             time.sleep(wait)
+            sp.start_playback(device_id=device_id, **kwargs)  # retry after wait
             return
         print(f"Playback error ({e.http_status}), reconnecting...")
         sp, device_id = connect()
@@ -982,36 +978,26 @@ def track_finished():
     This means a manual pause mid-track returns False (clock not expired)
     and won't trigger an unwanted auto-resume.
 
-    Also snapshots progress_ms into now_playing while the track is playing
-    so judge_last_track() uses real Spotify progress rather than wall-clock
-    time, which drifts when the track is paused.
+    While the track is playing, snapshots progress_ms and recalculates
+    ends_at as now + remaining time. This keeps ends_at accurate so that
+    pausing does not cause the DJ to wait out the full original duration.
     """
     if not auto_mode:
         return False
     try:
         pb = sp.current_playback()
         if pb and pb.get("is_playing") and pb.get("item"):
-            # Track is playing -- snapshot real progress for judge_last_track
-            now_playing["progress_ms"] = pb["progress_ms"]
-            if time.time() < now_playing["ends_at"]:
-                return False
+            # Track is playing -- snapshot progress and recalculate ends_at
+            # so it always reflects time remaining from now, not from start
+            progress = pb["progress_ms"]
+            duration = pb["item"]["duration_ms"]
+            remaining_ms = duration - progress
+            now_playing["progress_ms"] = progress
+            now_playing["ends_at"]     = time.time() + (remaining_ms / 1000) + 10
+            return False  # track is still playing
         if time.time() < now_playing["ends_at"]:
             return False  # not playing but end time not reached -- user paused
         return not pb or not pb.get("is_playing", False)
-    except Exception:
-        return False
-
-def ready_for_transition():
-    global last_playback_check
-    if time.time() - last_playback_check < PLAYBACK_CHECK_INTERVAL:
-        return False
-    last_playback_check = time.time()
-    try:
-        pb = sp.current_playback()
-        if not pb or not pb["is_playing"]:
-            return False
-        remaining = pb["item"]["duration_ms"] - pb["progress_ms"]
-        return remaining < SMOOTH_THRESHOLD
     except Exception:
         return False
 
@@ -1020,7 +1006,7 @@ def ready_for_transition():
 # =====================
 
 def run_dj():
-    global current_pool, auto_mode, last_auto_switch
+    global current_pool, auto_mode
 
     while True:
         if os.path.exists(INPUT_FILE):
@@ -1032,8 +1018,6 @@ def run_dj():
                 time.sleep(1)
                 continue
 
-            last_auto_switch = time.time()
-
             if choice == "quit":
                 print("DJ shutting down via hotkey.")
                 import sys
@@ -1043,21 +1027,21 @@ def run_dj():
                 ban_current_track()
 
             elif choice == "1":
-                auto_mode    = "hype"
-                current_pool = HYPE_POOL
-                play_from_pool(current_pool, "hype", interrupted=True)
+                auto_mode    = "american_rap"
+                current_pool = AMERICAN_RAP_POOL
+                play_from_pool(current_pool, "american_rap", interrupted=True)
             elif choice == "2":
-                auto_mode    = "tj"
-                current_pool = TJ_POOL
-                play_from_pool(current_pool, "tj", interrupted=True)
+                auto_mode    = "german_trap"
+                current_pool = GERMAN_TRAP_POOL
+                play_from_pool(current_pool, "german_trap", interrupted=True)
             elif choice == "3":
                 auto_mode    = "kpop"
                 current_pool = KPOP_POOL
                 play_from_pool(current_pool, "kpop", interrupted=True)
             elif choice == "4":
-                auto_mode    = "anime"
-                current_pool = ANIME_POOL
-                play_from_pool(current_pool, "anime", interrupted=True)
+                auto_mode    = "jpop"
+                current_pool = JPOP_POOL
+                play_from_pool(current_pool, "jpop", interrupted=True)
             elif choice == "5":
                 auto_mode = "global"
                 play_global_mix(interrupted=True)
@@ -1071,16 +1055,6 @@ def run_dj():
                 play_global_mix(interrupted=False)
             elif current_pool:
                 play_from_pool(current_pool, auto_mode, interrupted=False)
-            last_auto_switch = time.time()
-
-        elif time.time() - last_auto_switch > AUTO_INTERVAL:
-            if ready_for_transition():
-                print("Smooth DJ transition")
-                if auto_mode == "global":
-                    play_global_mix(interrupted=False)
-                elif current_pool:
-                    play_from_pool(current_pool, auto_mode, interrupted=False)
-                last_auto_switch = time.time()
 
         time.sleep(5)
 

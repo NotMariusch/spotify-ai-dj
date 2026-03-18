@@ -55,6 +55,9 @@ now_playing = {
     "started":     0.0,    # time.time() when playback started
     "progress_ms": 0,      # last known Spotify progress_ms, updated each poll
                             # used by judge_last_track() to avoid wall-clock drift
+    "uri":         None,   # Spotify URI of the track the DJ started
+                            # used by track_finished() to verify Spotify is still
+                            # playing the right track before acting on its state
     "is_trial":    False,  # True if the current artist is a non-graduated discovery
 }
 
@@ -392,12 +395,13 @@ def judge_last_track(interrupted=False):
         update_weight(artist, mode, WEIGHT_BOOST * 0.5)
         return
 
-    # Use Spotify-reported progress_ms if available (snapshotted during polling).
-    # Falls back to wall-clock elapsed only on the very first track before
-    # any poll has run. This avoids pause time inflating the play fraction.
+    # Use Spotify-reported progress_ms to judge how far the track got.
+    # If progress_ms is still 0, no poll ran before the track ended --
+    # we have no reliable data, so make no weight change rather than
+    # guessing with wall-clock time which can lie when paused.
     progress = now_playing["progress_ms"]
     if progress == 0:
-        progress = (time.time() - now_playing["started"]) * 1000
+        return  # no data -- skip judgement entirely
     fraction = progress / duration
 
     if fraction >= 0.80:
@@ -408,12 +412,13 @@ def judge_last_track(interrupted=False):
         update_weight(artist, mode, WEIGHT_PUNISH)
     # 25–80%: ambiguous, no change
 
-def set_now_playing(artist, mode, duration_ms):
+def set_now_playing(artist, mode, duration_ms, uri=None):
     now_playing["artist"]      = artist
     now_playing["mode"]        = mode
     now_playing["duration"]    = duration_ms
     now_playing["started"]     = time.time()
     now_playing["progress_ms"] = 0  # reset so previous track's value doesn't bleed in
+    now_playing["uri"]         = uri
 
 # =====================
 # DISCOVERY SYSTEM
@@ -926,6 +931,7 @@ def play_artist(name, mode, pool=None, _depth=0, interrupted=True):
             artist      = name,
             mode        = mode,
             duration_ms = chosen.get("duration_ms", 0),
+            uri         = chosen.get("uri"),
         )
 
         # If this is a trial artist, check if they earned a trial play
@@ -991,14 +997,23 @@ def track_finished():
     try:
         pb = sp.current_playback()
         if pb and pb.get("is_playing") and pb.get("item"):
-            # Track is playing -- snapshot progress and clear pause log flag
+            # Only snapshot progress if Spotify is playing the track we started.
+            # If the URI doesn't match (e.g. a queued track briefly played before
+            # safe_play took over), ignore this poll to avoid stale progress data.
+            current_uri = pb["item"].get("uri")
+            if current_uri != now_playing["uri"]:
+                return False  # wrong track playing, wait for our track
             now_playing["progress_ms"] = pb["progress_ms"]
-            _pause_logged = False
+            if _pause_logged:
+                print("  Playback resumed.")
+                _pause_logged = False
             return False
         # Spotify is not playing -- check if the track got far enough
         duration = now_playing["duration"]
         progress = now_playing["progress_ms"]
-        if duration == 0:
+        # progress_ms is 0 immediately after a track starts, before the first
+        # Spotify poll returns. Skip pause detection until we have real data.
+        if duration == 0 or progress == 0:
             return False
         fraction = progress / duration
         if fraction < TRACK_COMPLETE_THRESHOLD:

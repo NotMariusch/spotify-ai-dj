@@ -32,7 +32,7 @@ SpotifyDJ/
 - **Smart track filtering** — removes remixes, live versions, sped-up/slowed, language alternate versions, concert recordings, and other alternates automatically
 - **Weight system** — tracks play-through rate per artist per mode and adjusts selection probability over time. Artists you consistently listen through get picked more often; artists you skip get picked less
 - **Artist discovery** — when an artist's weight crosses a threshold, the DJ searches Spotify recommendations for similar artists, quality-checks their catalog, and adds passing candidates to the pool for a trial period. Artists that earn enough play-throughs are permanently saved
-- **Continuous playback** — plays songs back to back automatically. Stays on the same artist for 15 minutes, then switches
+- **Continuous playback** — plays songs back to back automatically, picking a new weighted-random artist from the active mode's pool after each track
 - **Persistent track cache** — fetches each artist's catalog once and caches it for 7 days, keeping API calls near zero during normal use
 - **Persistent recent history** — remembers recently played tracks across restarts to avoid immediate repeats
 - **Hardware skip support** — pre-loads the next track into Spotify's queue so the keyboard media skip button works correctly
@@ -91,7 +91,7 @@ Requires AutoHotkey v2 running `scripts/dj_hotkey.ahk`. Right Ctrl is remapped t
 
 | Hotkey | Mode | Artists |
 |--------|------|---------|
-| F13 + 1 | Hype | Juice WRLD, XXXTENTACION, Ski Mask, A Boogie |
+| F13 + 1 | American Rap | Juice WRLD, XXXTENTACION, Ski Mask, A Boogie |
 | F13 + 2 | German Trap | tj_beastboy, Sierra Kidd |
 | F13 + 3 | K-Pop | LE SSERAFIM, BLACKPINK, NewJeans, K/DA, aespa |
 | F13 + 4 | J-Pop | Ado, YOASOBI, Kenshi Yonezu, BABYMETAL, Aimer |
@@ -124,7 +124,7 @@ Trial artists need 5 play-throughs of 80%+ to graduate. Graduated artists are pe
 | File | Purpose | Reset by deleting? |
 |------|---------|-------------------|
 | `track_cache.json` | Cached artist track lists | Yes — refetched on next startup |
-| `dj_memory.json` | Artist weights per mode | Yes — all weights reset to 1.0 |
+| `dj_memory.json` | Artist weights per mode | Yes — all weights reset to 1.0. Also delete if you rename modes, as old mode keys become orphaned |
 | `recent_tracks.json` | Recently played titles | Yes — repeat protection clears |
 | `discovered_artists.json` | Discovered/graduated artists | Yes — discovery history lost |
 | `banned_tracks.json` | Permanently banned track IDs | Yes — all bans cleared |

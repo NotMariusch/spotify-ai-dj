@@ -36,7 +36,7 @@ SpotifyDJ/
 - **Continuous playback** — plays songs back to back automatically, picking a new weighted-random artist from the active mode’s pool after each track. Pausing in Spotify stops the DJ without auto-resuming — resume manually via your keyboard, Spotify app, or switch modes to start a new track
 - **Persistent track cache** — fetches each artist's catalog once and caches it for 7 days, keeping API calls near zero during normal use
 - **Persistent recent history** — remembers recently played tracks across restarts to avoid immediate repeats
-- **Hardware skip detection** — detects when you skip a track via your keyboard and applies the correct weight penalty. If the skip lands on an artist outside the current mode, the DJ immediately takes back control and picks a proper track
+- **Skip hotkey** — F13+6 skips the current track, applies the correct weight penalty, and immediately picks the next track from the active mode’s pool
 - **Duplicate instance protection** — lock file prevents two instances running simultaneously
 - **Crash recovery** — automatically restarts after unhandled exceptions and logs all crashes and exits to `data/dj_crash.log`
 
@@ -98,8 +98,9 @@ Requires AutoHotkey v2 running `scripts/dj_hotkey.ahk`. Right Ctrl is remapped t
 | F13 + 3 | K-Pop | LE SSERAFIM, BLACKPINK, NewJeans, K/DA, aespa |
 | F13 + 4 | J-Pop | Ado, YOASOBI, Kenshi Yonezu, BABYMETAL, Aimer |
 | F13 + 5 | Global | All artists, weighted random |
-| F13 + 6 | Ban current track permanently | |
-| F13 + 7 | Quit DJ cleanly | |
+| F13 + 6 | Skip current track | |
+| F13 + 8 | Ban current track permanently | |
+| F13 + 9 | Quit DJ cleanly | |
 
 ## How the Weight System Works
 

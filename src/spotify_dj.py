@@ -55,9 +55,6 @@ now_playing = {
     "started":     0.0,    # time.time() when playback started
     "progress_ms": 0,      # last known Spotify progress_ms, updated each poll
                             # used by judge_last_track() to avoid wall-clock drift
-    "uri":         None,   # Spotify URI of the track the DJ started
-                            # used by track_finished() to verify Spotify is still
-                            # playing the right track before acting on its state
     "is_trial":    False,  # True if the current artist is a non-graduated discovery
 }
 
@@ -412,13 +409,12 @@ def judge_last_track(interrupted=False):
         update_weight(artist, mode, WEIGHT_PUNISH)
     # 25–80%: ambiguous, no change
 
-def set_now_playing(artist, mode, duration_ms, uri=None):
+def set_now_playing(artist, mode, duration_ms):
     now_playing["artist"]      = artist
     now_playing["mode"]        = mode
     now_playing["duration"]    = duration_ms
     now_playing["started"]     = time.time()
     now_playing["progress_ms"] = 0  # reset so previous track's value doesn't bleed in
-    now_playing["uri"]         = uri
 
 # =====================
 # DISCOVERY SYSTEM
@@ -931,7 +927,6 @@ def play_artist(name, mode, pool=None, _depth=0, interrupted=True):
             artist      = name,
             mode        = mode,
             duration_ms = chosen.get("duration_ms", 0),
-            uri         = chosen.get("uri"),
         )
 
         # If this is a trial artist, check if they earned a trial play
@@ -969,10 +964,6 @@ def play_global_mix(interrupted=True):
 # 0.85 = track must have reached at least 85% before the DJ auto-advances.
 TRACK_COMPLETE_THRESHOLD = 0.85
 
-# Seconds after set_now_playing during which URI mismatches are ignored.
-# Spotify briefly reports the old/queued track URI in the transition window
-# between safe_play being called and the new track actually starting.
-URI_GRACE_SECS = 10
 
 def track_finished():
     """
@@ -992,37 +983,6 @@ def track_finished():
     try:
         pb = sp.current_playback()
         if pb and pb.get("is_playing") and pb.get("item"):
-            current_uri = pb["item"].get("uri")
-            if current_uri != now_playing["uri"]:
-                # URI mismatch -- but ignore it during the grace period after
-                # set_now_playing, when Spotify briefly reports the old/queued
-                # track URI while transitioning to the new track.
-                if time.time() - now_playing["started"] < URI_GRACE_SECS:
-                    return False  # still in transition window, not a real skip
-                # Grace period elapsed -- this is a genuine hardware skip.
-                if now_playing["uri"] is not None:
-                    judge_last_track(interrupted=True)
-                    skipped_to_artist = pb["item"]["artists"][0]["name"]
-                    pool = current_pool if auto_mode != "global" else GLOBAL_POOL
-                    if pool and skipped_to_artist not in pool:
-                        # Spotify skipped to an artist outside the current mode.
-                        # Ignore the foreign track and immediately pick a proper one.
-                        print(f"  Hardware skip landed on '{skipped_to_artist}' "
-                              f"(not in [{auto_mode}]) -- taking back control.")
-                        if auto_mode == "global":
-                            play_global_mix(interrupted=False)
-                        else:
-                            play_from_pool(pool, auto_mode, interrupted=False)
-                    else:
-                        # Skipped to a valid artist -- sync and let it play.
-                        print(f"  Hardware skip detected -- syncing to: {pb['item']['name']}")
-                        set_now_playing(
-                            artist      = skipped_to_artist,
-                            mode        = now_playing["mode"],
-                            duration_ms = pb["item"]["duration_ms"],
-                            uri         = current_uri,
-                        )
-                return False
             now_playing["progress_ms"] = pb["progress_ms"]
             if _pause_logged:
                 print("  Playback resumed.")
@@ -1067,6 +1027,14 @@ def run_dj():
                 print("DJ shutting down via hotkey.")
                 import sys
                 sys.exit(0)
+
+            elif choice == "skip":
+                print("Skip hotkey -- playing next track.")
+                judge_last_track(interrupted=True)
+                if auto_mode == "global":
+                    play_global_mix(interrupted=False)
+                elif current_pool:
+                    play_from_pool(current_pool, auto_mode, interrupted=False)
 
             elif choice == "ban":
                 ban_current_track()

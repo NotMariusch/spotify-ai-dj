@@ -32,7 +32,7 @@ SpotifyDJ/
 - **Smart track filtering** — removes remixes, live versions, sped-up/slowed, language alternate versions, concert recordings, and other alternates automatically
 - **Weight system** — tracks play-through rate per artist per mode and adjusts selection probability over time. Artists you consistently listen through get picked more often; artists you skip get picked less
 - **Artist discovery** — when an artist's weight crosses a threshold, the DJ searches Spotify recommendations for similar artists, quality-checks their catalog, and adds passing candidates to the pool for a trial period. Artists that earn enough play-throughs are permanently saved
-- **Continuous playback** — plays songs back to back automatically, picking a new weighted-random artist from the active mode's pool after each track
+- **Continuous playback** — plays songs back to back automatically, picking a new weighted-random artist from the active mode’s pool after each track. Pausing in Spotify stops the DJ without auto-resuming — resume manually via your keyboard, Spotify app, or switch modes to start a new track
 - **Persistent track cache** — fetches each artist's catalog once and caches it for 7 days, keeping API calls near zero during normal use
 - **Persistent recent history** — remembers recently played tracks across restarts to avoid immediate repeats
 - **Hardware skip support** — pre-loads the next track into Spotify's queue so the keyboard media skip button works correctly
@@ -79,6 +79,8 @@ The first run fetches and caches all artists (~1 minute with rate-limit delays).
 
 > **Note:** Spotify enforces strict API rate limits. If you hit a limit during the first fetch (startup will print a warning and stop early), the DJ will still run using whichever artists were cached successfully. The missing artists will be retried automatically on the next startup once the ban window expires (can be several hours). Do not delete `track_cache.json` between runs unless necessary.
 
+> **Note:** Spotify enforces strict API rate limits. If you hit a limit during the first fetch (startup will print a warning and stop early), the DJ will still run using whichever artists were cached successfully. The missing artists will be retried automatically on the next startup once the ban window expires (can be several hours). Do not delete `track_cache.json` between runs unless necessary.
+
 **8. For normal background use:**
 ```
 start_dj_hidden.vbs
@@ -106,7 +108,7 @@ Each artist starts at weight `1.0` per mode. At every track boundary the DJ judg
 | Condition | Weight change |
 |-----------|--------------|
 | Played 80%+ naturally | +0.15 |
-| Switched mode in first 25% | -0.10 |
+| Skipped, banned, or switched mode in first 25% | -0.10 |
 | Switched between 25–80% | No change |
 
 Weights are clamped between `0.2` (floor) and `3.0` (ceiling). `weighted_choice()` uses these as probabilities so higher-weight artists get picked more often without ever fully excluding lower-weight ones.

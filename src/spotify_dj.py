@@ -53,13 +53,13 @@ now_playing = {
     "mode":        None,   # mode string ("american_rap", "kpop", etc.)
     "duration":    0,      # track duration_ms
     "started":     0.0,    # time.time() when playback started
-    "ends_at":     9e18,   # time.time() when track is expected to end naturally
-                            # initialized to far future so track_finished() never
-                            # fires before the first track is started by the DJ
     "progress_ms": 0,      # last known Spotify progress_ms, updated each poll
                             # used by judge_last_track() to avoid wall-clock drift
     "is_trial":    False,  # True if the current artist is a non-graduated discovery
 }
+
+# Prevents the pause detection message from printing every 5s loop iteration.
+_pause_logged = False
 
 track_disk_cache = {}
 
@@ -414,8 +414,6 @@ def set_now_playing(artist, mode, duration_ms):
     now_playing["duration"]    = duration_ms
     now_playing["started"]     = time.time()
     now_playing["progress_ms"] = 0  # reset so previous track's value doesn't bleed in
-    # Add a 10s buffer so brief Spotify gaps don't trigger a false resume
-    now_playing["ends_at"]     = time.time() + (duration_ms / 1000) + 10
 
 # =====================
 # DISCOVERY SYSTEM
@@ -970,34 +968,46 @@ def play_global_mix(interrupted=True):
 # TRANSITION CHECK
 # =====================
 
+# Fraction of track that must have played before the DJ considers it finished.
+# Stops a manual pause from being mistaken for a natural track end.
+# 0.85 = track must have reached at least 85% before the DJ auto-advances.
+TRACK_COMPLETE_THRESHOLD = 0.85
+
 def track_finished():
     """
-    Returns True only when the DJ's current track has naturally ended:
-    - Spotify reports not playing, AND
-    - We are past the expected end time of the track we started.
-    This means a manual pause mid-track returns False (clock not expired)
-    and won't trigger an unwanted auto-resume.
+    Returns True only when the current track has played far enough to be
+    considered naturally finished (>= TRACK_COMPLETE_THRESHOLD of its duration)
+    AND Spotify is no longer playing.
 
-    While the track is playing, snapshots progress_ms and recalculates
-    ends_at as now + remaining time. This keeps ends_at accurate so that
-    pausing does not cause the DJ to wait out the full original duration.
+    This cleanly separates a manual pause (progress low, stopped early) from
+    a natural track end (progress near 100%, then stopped). A paused track
+    will never trigger an auto-advance regardless of how long it sits paused.
+    Resuming via keyboard or Spotify app works normally since the DJ never
+    interferes with a paused track.
     """
+    global _pause_logged
     if not auto_mode:
         return False
     try:
         pb = sp.current_playback()
         if pb and pb.get("is_playing") and pb.get("item"):
-            # Track is playing -- snapshot progress and recalculate ends_at
-            # so it always reflects time remaining from now, not from start
-            progress = pb["progress_ms"]
-            duration = pb["item"]["duration_ms"]
-            remaining_ms = duration - progress
-            now_playing["progress_ms"] = progress
-            now_playing["ends_at"]     = time.time() + (remaining_ms / 1000) + 10
-            return False  # track is still playing
-        if time.time() < now_playing["ends_at"]:
-            return False  # not playing but end time not reached -- user paused
-        return not pb or not pb.get("is_playing", False)
+            # Track is playing -- snapshot progress and clear pause log flag
+            now_playing["progress_ms"] = pb["progress_ms"]
+            _pause_logged = False
+            return False
+        # Spotify is not playing -- check if the track got far enough
+        duration = now_playing["duration"]
+        progress = now_playing["progress_ms"]
+        if duration == 0:
+            return False
+        fraction = progress / duration
+        if fraction < TRACK_COMPLETE_THRESHOLD:
+            if not _pause_logged:
+                print(f"  Paused at {progress / 1000:.0f}s / {duration / 1000:.0f}s "
+                      f"({fraction * 100:.0f}%) -- waiting for manual resume.")
+                _pause_logged = True
+            return False
+        return True
     except Exception:
         return False
 
@@ -1047,8 +1057,8 @@ def run_dj():
                 play_global_mix(interrupted=True)
 
         # Resume when the current track has naturally finished.
-        # track_finished() only returns True after the expected end time
-        # has passed, so manual pauses mid-track are ignored.
+        # track_finished() only returns True when progress reached 85%+
+        # before stopping, so manual pauses are never mistaken for track ends.
         if track_finished():
             print("Track finished -- playing next")
             if auto_mode == "global":

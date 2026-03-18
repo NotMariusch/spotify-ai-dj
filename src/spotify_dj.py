@@ -55,10 +55,16 @@ last_playback_check     = 0.0
 
 # Tracks what's currently playing so we can judge it when the next track starts.
 now_playing = {
-    "artist":   None,  # artist name string
-    "mode":     None,  # mode string ("hype", "kpop", etc.)
-    "duration": 0,     # track duration_ms
-    "started":  0.0,   # time.time() when playback started
+    "artist":      None,   # artist name string
+    "mode":        None,   # mode string ("hype", "kpop", etc.)
+    "duration":    0,      # track duration_ms
+    "started":     0.0,    # time.time() when playback started
+    "ends_at":     9e18,   # time.time() when track is expected to end naturally
+                            # initialized to far future so track_finished() never
+                            # fires before the first track is started by the DJ
+    "progress_ms": 0,      # last known Spotify progress_ms, updated each poll
+                            # used by judge_last_track() to avoid wall-clock drift
+    "is_trial":    False,  # True if the current artist is a non-graduated discovery
 }
 
 track_disk_cache = {}
@@ -393,8 +399,13 @@ def judge_last_track(interrupted=False):
         update_weight(artist, mode, WEIGHT_BOOST * 0.5)
         return
 
-    elapsed_ms = (time.time() - now_playing["started"]) * 1000
-    fraction   = elapsed_ms / duration
+    # Use Spotify-reported progress_ms if available (snapshotted during polling).
+    # Falls back to wall-clock elapsed only on the very first track before
+    # any poll has run. This avoids pause time inflating the play fraction.
+    progress = now_playing["progress_ms"]
+    if progress == 0:
+        progress = (time.time() - now_playing["started"]) * 1000
+    fraction = progress / duration
 
     if fraction >= 0.80:
         update_weight(artist, mode, WEIGHT_BOOST)
@@ -403,10 +414,13 @@ def judge_last_track(interrupted=False):
     # 25–80%: ambiguous, no change
 
 def set_now_playing(artist, mode, duration_ms):
-    now_playing["artist"]   = artist
-    now_playing["mode"]     = mode
-    now_playing["duration"] = duration_ms
-    now_playing["started"]  = time.time()
+    now_playing["artist"]      = artist
+    now_playing["mode"]        = mode
+    now_playing["duration"]    = duration_ms
+    now_playing["started"]     = time.time()
+    now_playing["progress_ms"] = 0  # reset so previous track's value doesn't bleed in
+    # Add a 10s buffer so brief Spotify gaps don't trigger a false resume
+    now_playing["ends_at"]     = time.time() + (duration_ms / 1000) + 10
 
 # =====================
 # DISCOVERY SYSTEM
@@ -960,6 +974,33 @@ def play_global_mix(interrupted=True):
 # TRANSITION CHECK
 # =====================
 
+def track_finished():
+    """
+    Returns True only when the DJ's current track has naturally ended:
+    - Spotify reports not playing, AND
+    - We are past the expected end time of the track we started.
+    This means a manual pause mid-track returns False (clock not expired)
+    and won't trigger an unwanted auto-resume.
+
+    Also snapshots progress_ms into now_playing while the track is playing
+    so judge_last_track() uses real Spotify progress rather than wall-clock
+    time, which drifts when the track is paused.
+    """
+    if not auto_mode:
+        return False
+    try:
+        pb = sp.current_playback()
+        if pb and pb.get("is_playing") and pb.get("item"):
+            # Track is playing -- snapshot real progress for judge_last_track
+            now_playing["progress_ms"] = pb["progress_ms"]
+            if time.time() < now_playing["ends_at"]:
+                return False
+        if time.time() < now_playing["ends_at"]:
+            return False  # not playing but end time not reached -- user paused
+        return not pb or not pb.get("is_playing", False)
+    except Exception:
+        return False
+
 def ready_for_transition():
     global last_playback_check
     if time.time() - last_playback_check < PLAYBACK_CHECK_INTERVAL:
@@ -993,7 +1034,12 @@ def run_dj():
 
             last_auto_switch = time.time()
 
-            if choice == "ban":
+            if choice == "quit":
+                print("DJ shutting down via hotkey.")
+                import sys
+                sys.exit(0)
+
+            elif choice == "ban":
                 ban_current_track()
 
             elif choice == "1":
@@ -1016,7 +1062,18 @@ def run_dj():
                 auto_mode = "global"
                 play_global_mix(interrupted=True)
 
-        if time.time() - last_auto_switch > AUTO_INTERVAL:
+        # Resume when the current track has naturally finished.
+        # track_finished() only returns True after the expected end time
+        # has passed, so manual pauses mid-track are ignored.
+        if track_finished():
+            print("Track finished -- playing next")
+            if auto_mode == "global":
+                play_global_mix(interrupted=False)
+            elif current_pool:
+                play_from_pool(current_pool, auto_mode, interrupted=False)
+            last_auto_switch = time.time()
+
+        elif time.time() - last_auto_switch > AUTO_INTERVAL:
             if ready_for_transition():
                 print("Smooth DJ transition")
                 if auto_mode == "global":

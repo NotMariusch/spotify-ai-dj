@@ -77,6 +77,8 @@ start_dj.bat
 ```
 The first run fetches and caches all artists (~1 minute with rate-limit delays). After that, subsequent startups load from cache instantly.
 
+> **Note:** Spotify enforces strict API rate limits. If you hit a limit during the first fetch (startup will print a warning and stop early), the DJ will still run using whichever artists were cached successfully. The missing artists will be retried automatically on the next startup once the ban window expires (can be several hours). Do not delete `track_cache.json` between runs unless necessary.
+
 **8. For normal background use:**
 ```
 start_dj_hidden.vbs
@@ -94,7 +96,8 @@ Requires AutoHotkey v2 running `scripts/dj_hotkey.ahk`. Right Ctrl is remapped t
 | F13 + 3 | K-Pop | LE SSERAFIM, BLACKPINK, NewJeans, K/DA, aespa |
 | F13 + 4 | J-Pop | Ado, YOASOBI, Kenshi Yonezu, BABYMETAL, Aimer |
 | F13 + 5 | Global | All artists, weighted random |
-| F13 + 6 | Ban current track permanently |
+| F13 + 6 | Ban current track permanently | |
+| F13 + 7 | Quit DJ cleanly | |
 
 ## How the Weight System Works
 
@@ -124,4 +127,5 @@ Trial artists need 5 play-throughs of 80%+ to graduate. Graduated artists are pe
 | `dj_memory.json` | Artist weights per mode | Yes — all weights reset to 1.0 |
 | `recent_tracks.json` | Recently played titles | Yes — repeat protection clears |
 | `discovered_artists.json` | Discovered/graduated artists | Yes — discovery history lost |
+| `banned_tracks.json` | Permanently banned track IDs | Yes — all bans cleared |
 | `dj_crash.log` | Crash and exit log | Yes — safe to delete anytime |

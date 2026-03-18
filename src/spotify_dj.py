@@ -63,6 +63,16 @@ now_playing = {
 
 track_disk_cache = {}
 
+# Raised by fetch_artist_tracks_by_id when Spotify returns 429, so callers
+# can react immediately instead of sleeping the full Retry-After inline.
+class RateLimitError(Exception):
+    def __init__(self, retry_after):
+        self.retry_after = retry_after
+
+# Artists that had no cache entry AND couldn't be fetched due to rate limiting.
+# They stay in their pools but are skipped during play until successfully fetched.
+uncached_artists = set()
+
 # =====================
 # DISK CACHE
 # =====================
@@ -591,7 +601,9 @@ def connect():
             client_secret=CLIENT_SECRET,
             redirect_uri=REDIRECT_URI,
             scope=SCOPE
-        )
+        ),
+        retries=0,        # disable Spotipy's internal retry/backoff so 429s
+        backoff_factor=0, # raise immediately as SpotifyException instead of blocking
     )
     for attempt in range(5):
         devices = sp.devices().get("devices", [])
@@ -740,19 +752,38 @@ def fetch_artist_tracks_by_id(artist_name, artist_id):
         save_track_cache()
         return tracks
 
-    except spotipy.exceptions.SpotifyException as e:
-        if e.http_status == 429:
-            wait = int(e.headers.get("Retry-After", 30))
-            print(f"Rate limit hit fetching {artist_name}. Waiting {wait}s.")
-            time.sleep(wait)
-            return []
+    except Exception as e:
+        # Spotipy sometimes raises rate limit errors as SpotifyException with
+        # http_status 429, but can also surface them as a plain Exception with
+        # the message text below — catch both.
+        msg = str(e).lower()
+        is_rate_limit = (
+            (hasattr(e, "http_status") and e.http_status == 429) or
+            "rate" in msg or
+            "request limit" in msg or
+            "retry will occur" in msg
+        )
+        if is_rate_limit:
+            # Try to extract Retry-After from the message (e.g. "...after: 22347 s")
+            import re as _re
+            match = _re.search(r"(\d+)\s*s", msg)
+            wait = int(match.group(1)) if match else (
+                int(e.headers.get("Retry-After", 30)) if hasattr(e, "headers") and e.headers else 30
+            )
+            print(f"  Rate limit hit fetching {artist_name}. Retry-After: {wait}s.")
+            raise RateLimitError(wait)
         print(f"Track fetch failed for {artist_name}: {e}")
         return []
 
 def get_artist_tracks(artist_name):
     """Fetch tracks for a permanent artist (looks up ID from ARTISTS dict)."""
     artist_id = ARTISTS[artist_name]
-    return fetch_artist_tracks_by_id(artist_name, artist_id)
+    try:
+        return fetch_artist_tracks_by_id(artist_name, artist_id)
+    except RateLimitError:
+        uncached_artists.add(artist_name)
+        print(f"  {artist_name} marked as uncached due to rate limit.")
+        return []
 
 # =====================
 # PREWARM CACHE
@@ -762,6 +793,11 @@ def prewarm_cache(artist_names, delay=2.0):
     """
     Fetch and cache all artists at startup. After this runs,
     get_artist_tracks() makes zero API calls for 7 days.
+
+    If a rate limit is hit mid-prewarm, stops early and marks the
+    remaining artists in uncached_artists so they're skipped during
+    play rather than causing a hang. They'll be retried on next startup
+    once the ban expires.
     """
     print("Pre-warming track cache...")
     for name in artist_names:
@@ -772,8 +808,19 @@ def prewarm_cache(artist_names, delay=2.0):
                 print(f"  ✓ {name} (cached)")
                 continue
         print(f"  Fetching {name}...")
-        get_artist_tracks(name)
-        time.sleep(delay)
+        try:
+            get_artist_tracks(name)
+        except RateLimitError as e:
+            print(f"  Rate limited during prewarm (Retry-After: {e.retry_after}s).")
+            print(f"  Stopping prewarm early — cached artists will play normally.")
+            # Mark this artist and all remaining ones as uncached
+            remaining = artist_names[artist_names.index(name):]
+            for skipped in remaining:
+                if not track_disk_cache.get(skipped):
+                    uncached_artists.add(skipped)
+                    print(f"  ⚠ {skipped} (uncached — will be skipped until fetched)")
+            break
+        time.sleep(delay + random.uniform(0, 1.5))
     print("Cache ready.\n")
 
 # =====================
@@ -822,6 +869,19 @@ def play_artist(name, mode, pool=None, _depth=0, interrupted=True):
     if _depth == 0:
         judge_last_track(interrupted=interrupted)
         run_pending_discoveries()
+
+    # Skip artists that have no cache and couldn't be fetched at startup
+    # due to rate limiting. Try another artist from the pool instead.
+    if name in uncached_artists:
+        print(f"  Skipping {name} (uncached, rate limited at startup)")
+        if pool:
+            candidates = [a for a in pool if a != name and a not in uncached_artists]
+            if candidates:
+                play_artist(random.choice(candidates), mode, pool,
+                            _depth=_depth + 1, interrupted=interrupted)
+            else:
+                print("  All pool artists are uncached, nothing to play.")
+        return
 
     print(f"DJ -> {name}")
     time.sleep(1)

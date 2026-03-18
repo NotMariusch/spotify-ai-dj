@@ -942,16 +942,6 @@ def play_artist(name, mode, pool=None, _depth=0, interrupted=True):
             not discovered_artists[name].get("graduated", False)
         )
 
-        # Pre-load next track into queue for hardware skip button
-        remaining = [t for t in tracks if t["uri"] != chosen["uri"]]
-        if remaining and not DEBUG_MODE:
-            try:
-                queued = random.choice(remaining)
-                sp.add_to_queue(queued["uri"], device_id=device_id)
-                print(f"  queued next: {queued['name']}")
-            except Exception:
-                pass
-
     except Exception as e:
         print(f"  play_artist failed: {e}")
         if pool:
@@ -979,6 +969,11 @@ def play_global_mix(interrupted=True):
 # 0.85 = track must have reached at least 85% before the DJ auto-advances.
 TRACK_COMPLETE_THRESHOLD = 0.85
 
+# Seconds after set_now_playing during which URI mismatches are ignored.
+# Spotify briefly reports the old/queued track URI in the transition window
+# between safe_play being called and the new track actually starting.
+URI_GRACE_SECS = 10
+
 def track_finished():
     """
     Returns True only when the current track has played far enough to be
@@ -997,12 +992,37 @@ def track_finished():
     try:
         pb = sp.current_playback()
         if pb and pb.get("is_playing") and pb.get("item"):
-            # Only snapshot progress if Spotify is playing the track we started.
-            # If the URI doesn't match (e.g. a queued track briefly played before
-            # safe_play took over), ignore this poll to avoid stale progress data.
             current_uri = pb["item"].get("uri")
             if current_uri != now_playing["uri"]:
-                return False  # wrong track playing, wait for our track
+                # URI mismatch -- but ignore it during the grace period after
+                # set_now_playing, when Spotify briefly reports the old/queued
+                # track URI while transitioning to the new track.
+                if time.time() - now_playing["started"] < URI_GRACE_SECS:
+                    return False  # still in transition window, not a real skip
+                # Grace period elapsed -- this is a genuine hardware skip.
+                if now_playing["uri"] is not None:
+                    judge_last_track(interrupted=True)
+                    skipped_to_artist = pb["item"]["artists"][0]["name"]
+                    pool = current_pool if auto_mode != "global" else GLOBAL_POOL
+                    if pool and skipped_to_artist not in pool:
+                        # Spotify skipped to an artist outside the current mode.
+                        # Ignore the foreign track and immediately pick a proper one.
+                        print(f"  Hardware skip landed on '{skipped_to_artist}' "
+                              f"(not in [{auto_mode}]) -- taking back control.")
+                        if auto_mode == "global":
+                            play_global_mix(interrupted=False)
+                        else:
+                            play_from_pool(pool, auto_mode, interrupted=False)
+                    else:
+                        # Skipped to a valid artist -- sync and let it play.
+                        print(f"  Hardware skip detected -- syncing to: {pb['item']['name']}")
+                        set_now_playing(
+                            artist      = skipped_to_artist,
+                            mode        = now_playing["mode"],
+                            duration_ms = pb["item"]["duration_ms"],
+                            uri         = current_uri,
+                        )
+                return False
             now_playing["progress_ms"] = pb["progress_ms"]
             if _pause_logged:
                 print("  Playback resumed.")

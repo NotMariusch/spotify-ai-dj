@@ -36,7 +36,7 @@ SpotifyDJ/
 - **Continuous playback** — plays songs back to back automatically, picking a new weighted-random artist from the active mode’s pool after each track. Pausing in Spotify stops the DJ without auto-resuming — resume manually via your keyboard, Spotify app, or switch modes to start a new track
 - **Persistent track cache** — fetches each artist's catalog once and caches it for 7 days, keeping API calls near zero during normal use
 - **Persistent recent history** — remembers recently played tracks across restarts to avoid immediate repeats
-- **Hardware skip support** — pre-loads the next track into Spotify's queue so the keyboard media skip button works correctly
+- **Hardware skip detection** — detects when you skip a track via your keyboard and applies the correct weight penalty. If the skip lands on an artist outside the current mode, the DJ immediately takes back control and picks a proper track
 - **Duplicate instance protection** — lock file prevents two instances running simultaneously
 - **Crash recovery** — automatically restarts after unhandled exceptions and logs all crashes and exits to `data/dj_crash.log`
 

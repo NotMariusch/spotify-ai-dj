@@ -109,8 +109,9 @@ Each artist starts at weight `1.0` per mode. At every track boundary the DJ judg
 | Condition | Weight change |
 |-----------|--------------|
 | Played 80%+ naturally | +0.15 |
-| Skipped, banned, or switched mode in first 25% | -0.10 |
+| Skipped or banned in first 25% | -0.10 |
 | Switched between 25–80% | No change |
+| Mode switch (any point) | No change |
 
 Weights are clamped between `0.2` (floor) and `3.0` (ceiling). `weighted_choice()` uses these as probabilities so higher-weight artists get picked more often without ever fully excluding lower-weight ones.
 

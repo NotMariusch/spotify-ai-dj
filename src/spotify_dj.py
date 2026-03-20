@@ -368,19 +368,23 @@ def update_weight(artist, mode, delta):
     if delta > 0 and updated >= DISCOVERY_TRIGGER_WEIGHT:
         queue_discovery(artist, mode)
 
-def judge_last_track(interrupted=False):
+def judge_last_track(interrupted=False, mode_switch=False):
     """
     Called before every new track starts. Judges whether the previous
     track counts as completed or cut short, and updates weights.
 
-    interrupted=True  — caller knows it was cut short (manual mode switch)
-    interrupted=False — use time-based judgement (auto-transition)
+    interrupted=True  -- skip hotkey: always apply weight penalty
+    mode_switch=True  -- mode hotkey: no weight change at all
+    both False        -- natural end or track_finished: use progress fraction
     """
     artist = now_playing["artist"]
     mode   = now_playing["mode"]
 
     if not artist or not mode:
         return
+
+    if mode_switch:
+        return  # switching modes is neutral -- no weight change
 
     if interrupted:
         update_weight(artist, mode, WEIGHT_PUNISH)
@@ -866,7 +870,7 @@ def select_best_tracks(tracks):
 # PLAY FUNCTIONS
 # =====================
 
-def play_artist(name, mode, pool=None, _depth=0, interrupted=True):
+def play_artist(name, mode, pool=None, _depth=0, interrupted=True, mode_switch=False):
     max_depth = len(pool) if pool else 1
     if _depth >= max_depth:
         print("  All artists in pool exhausted, skipping this cycle.")
@@ -875,7 +879,7 @@ def play_artist(name, mode, pool=None, _depth=0, interrupted=True):
     # Before doing anything else, judge the previous track and
     # process any pending discovery searches.
     if _depth == 0:
-        judge_last_track(interrupted=interrupted)
+        judge_last_track(interrupted=interrupted, mode_switch=mode_switch)
         run_pending_discoveries()
 
     # Skip artists that have no cache and couldn't be fetched at startup
@@ -946,13 +950,13 @@ def play_artist(name, mode, pool=None, _depth=0, interrupted=True):
         else:
             time.sleep(2)
 
-def play_from_pool(pool, mode, interrupted=True):
-    play_artist(weighted_choice(pool, mode), mode, pool, interrupted=interrupted)
+def play_from_pool(pool, mode, interrupted=True, mode_switch=False):
+    play_artist(weighted_choice(pool, mode), mode, pool, interrupted=interrupted, mode_switch=mode_switch)
 
-def play_global_mix(interrupted=True):
+def play_global_mix(interrupted=True, mode_switch=False):
     artist = weighted_choice(GLOBAL_POOL, "global")
     print(f"Global DJ -> {artist}")
-    play_artist(artist, "global", GLOBAL_POOL, interrupted=interrupted)
+    play_artist(artist, "global", GLOBAL_POOL, interrupted=interrupted, mode_switch=mode_switch)
 
 # =====================
 # TRANSITION CHECK
@@ -1040,22 +1044,22 @@ def run_dj():
             elif choice == "1":
                 auto_mode    = "american_rap"
                 current_pool = AMERICAN_RAP_POOL
-                play_from_pool(current_pool, "american_rap", interrupted=True)
+                play_from_pool(current_pool, "american_rap", mode_switch=True)
             elif choice == "2":
                 auto_mode    = "german_trap"
                 current_pool = GERMAN_TRAP_POOL
-                play_from_pool(current_pool, "german_trap", interrupted=True)
+                play_from_pool(current_pool, "german_trap", mode_switch=True)
             elif choice == "3":
                 auto_mode    = "kpop"
                 current_pool = KPOP_POOL
-                play_from_pool(current_pool, "kpop", interrupted=True)
+                play_from_pool(current_pool, "kpop", mode_switch=True)
             elif choice == "4":
                 auto_mode    = "jpop"
                 current_pool = JPOP_POOL
-                play_from_pool(current_pool, "jpop", interrupted=True)
+                play_from_pool(current_pool, "jpop", mode_switch=True)
             elif choice == "5":
                 auto_mode = "global"
-                play_global_mix(interrupted=True)
+                play_global_mix(mode_switch=True)
 
         # Resume when the current track has naturally finished.
         # track_finished() only returns True when progress reached 85%+

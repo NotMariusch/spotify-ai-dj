@@ -96,7 +96,7 @@ Requires AutoHotkey v2 running `scripts/dj_hotkey.ahk`. Right Ctrl is remapped t
 | F13 + 1 | American Rap | Juice WRLD, XXXTENTACION, Ski Mask, A Boogie |
 | F13 + 2 | German Trap | tj_beastboy, Sierra Kidd |
 | F13 + 3 | K-Pop | LE SSERAFIM, BLACKPINK, NewJeans, K/DA, aespa |
-| F13 + 4 | J-Pop | Ado, YOASOBI, Kenshi Yonezu, BABYMETAL, Aimer |
+| F13 + 4 | J-Pop | Ado, YOASOBI, Eve, BABYMETAL, Aimer |
 | F13 + 5 | Global | All artists, weighted random |
 | F13 + 6 | Skip current track | |
 | F13 + 8 | Ban current track permanently | |

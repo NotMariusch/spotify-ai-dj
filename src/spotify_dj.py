@@ -271,17 +271,16 @@ ARTISTS = {
     "aespa":         "6YVMFz59CuY7ngCxTxjpxE",
     "Ado":           "6mEQK9m2krja6X1cfsAjfl",
     "YOASOBI":       "64tJ2EAv1R6UaZqc4iOCyj",
-    "Kenshi Yonezu": "4UK2Lzi6fBfUi9rpDt6cik",
+    "Eve":           "58oPVy7oihAEXE0Ott6JOf",
     "BABYMETAL":     "630wzNP2OL7fl4Xl0GnMWq",
     "Aimer":         "0bAsR2unSRpn6BQPEnNlZm",
-    "Joji":          "6jJ0s89eD6GaHleKKya26X",
-    "The Weeknd":    "1Xyo4u8uXC1ZmMpatF05PJ",
+    "Joji":          "3MZsBdqDrRTJihTHQrO6Dq",
 }
 
 AMERICAN_RAP_POOL = ["Juice WRLD", "XXXTENTACION", "Ski Mask", "A Boogie"]
 GERMAN_TRAP_POOL  = ["tj_beastboy", "Sierra Kidd"]
 KPOP_POOL         = ["LE SSERAFIM", "BLACKPINK", "NewJeans", "K/DA", "aespa"]
-JPOP_POOL         = ["Ado", "YOASOBI", "Kenshi Yonezu", "BABYMETAL", "Aimer"]
+JPOP_POOL         = ["Ado", "YOASOBI", "Eve", "BABYMETAL", "Aimer"]
 
 GLOBAL_POOL = list(ARTISTS.keys())
 

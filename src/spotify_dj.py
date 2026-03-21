@@ -655,17 +655,10 @@ def connect():
         retries=0,        # disable Spotipy's internal retry/backoff so 429s
         backoff_factor=0, # raise immediately as SpotifyException instead of blocking
     )
+    # Verify at least one device is reachable before returning
     for attempt in range(5):
-        devices = sp.devices().get("devices", [])
-        if devices:
-            # Prefer the device that is currently active (is_active = currently playing
-            # or was most recently used). Falls back to first available if none is active.
-            active = next((d for d in devices if d.get("is_active")), None)
-            chosen = active or devices[0]
-            if len(devices) > 1:
-                status = "active" if active else "fallback (none active)"
-                print(f"  Using device: '{chosen['name']}' ({status})")
-            return sp, chosen["id"]
+        if sp.devices().get("devices"):
+            return sp
         print(f"No active Spotify device found (attempt {attempt + 1}/5). "
               f"Open Spotify and start playing something, then wait...")
         time.sleep(10)
@@ -674,7 +667,28 @@ def connect():
         "Make sure Spotify is open on at least one device."
     )
 
-sp, device_id = connect()
+def get_active_device_id():
+    """
+    Resolve the currently active Spotify device fresh on every play call.
+    This means switching playback to a different device in Spotify is
+    respected immediately — the DJ never forces audio back to the device
+    that happened to be active at startup.
+    Returns None if no device is found (Spotify will use its own default).
+    """
+    try:
+        devices = sp.devices().get("devices", [])
+        if not devices:
+            return None
+        active = next((d for d in devices if d.get("is_active")), None)
+        chosen = active or devices[0]
+        if len(devices) > 1:
+            status = "active" if active else "fallback (none active)"
+            print(f"  Device: '{chosen['name']}' ({status})")
+        return chosen["id"]
+    except Exception:
+        return None
+
+sp = connect()
 
 # =====================
 # DEBUG MODE
@@ -690,20 +704,20 @@ def safe_play(**kwargs):
         print(f"[DEBUG] Would play: {kwargs}")
         return
 
-    global sp, device_id
+    global sp
 
     try:
-        sp.start_playback(device_id=device_id, **kwargs)
+        sp.start_playback(device_id=get_active_device_id(), **kwargs)
     except spotipy.exceptions.SpotifyException as e:
         if e.http_status == 429:
             wait = int(e.headers.get("Retry-After", 30))
             print(f"Rate limit hit in safe_play. Waiting {wait}s...")
             time.sleep(wait)
-            sp.start_playback(device_id=device_id, **kwargs)  # retry after wait
+            sp.start_playback(device_id=get_active_device_id(), **kwargs)  # retry after wait
             return
         print(f"Playback error ({e.http_status}), reconnecting...")
-        sp, device_id = connect()
-        sp.start_playback(device_id=device_id, **kwargs)
+        sp = connect()
+        sp.start_playback(device_id=get_active_device_id(), **kwargs)
 
 # =====================
 # FILTER FUNCTIONS

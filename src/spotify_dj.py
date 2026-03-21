@@ -509,8 +509,14 @@ def run_pending_discoveries():
 # Last.fm API key for artist similarity lookups.
 # Replaces Spotify's deprecated /recommendations endpoint (removed Nov 2024).
 # Set LASTFM_API_KEY in .env or it falls back to the value below.
-LASTFM_API_KEY = os.getenv("LASTFM_API_KEY", "ab0495aa1ec88521fbda57c2a055daa3")
+LASTFM_API_KEY = os.getenv("LASTFM_API_KEY")
 LASTFM_API_URL = "http://ws.audioscrobbler.com/2.0/"
+
+if not LASTFM_API_KEY:
+    raise RuntimeError(
+        "LASTFM_API_KEY is not set. Add it to your .env file.\n"
+        "Get a free key at: https://www.last.fm/api/account/create"
+    )
 
 def discover_new_artist(seed_artist, mode):
     """
@@ -652,7 +658,14 @@ def connect():
     for attempt in range(5):
         devices = sp.devices().get("devices", [])
         if devices:
-            return sp, devices[0]["id"]
+            # Prefer the device that is currently active (is_active = currently playing
+            # or was most recently used). Falls back to first available if none is active.
+            active = next((d for d in devices if d.get("is_active")), None)
+            chosen = active or devices[0]
+            if len(devices) > 1:
+                status = "active" if active else "fallback (none active)"
+                print(f"  Using device: '{chosen['name']}' ({status})")
+            return sp, chosen["id"]
         print(f"No active Spotify device found (attempt {attempt + 1}/5). "
               f"Open Spotify and start playing something, then wait...")
         time.sleep(10)
@@ -897,7 +910,7 @@ def select_best_tracks(tracks):
         if score_new > score_old:
             grouped[title] = (t, score_new)
 
-    return [t for t, _ in grouped.values() if not is_alternate_version(t)]
+    return [t for t, _ in grouped.values()]
 
 # =====================
 # PLAY FUNCTIONS

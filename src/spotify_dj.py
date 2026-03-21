@@ -5,6 +5,8 @@ import random
 import traceback
 import datetime
 import re
+import urllib.request
+import urllib.parse
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from dotenv import load_dotenv
@@ -504,50 +506,81 @@ def run_pending_discoveries():
     except Exception as e:
         print(f"  Discovery error: {e}")
 
+# Last.fm API key for artist similarity lookups.
+# Replaces Spotify's deprecated /recommendations endpoint (removed Nov 2024).
+# Set LASTFM_API_KEY in .env or it falls back to the value below.
+LASTFM_API_KEY = os.getenv("LASTFM_API_KEY", "ab0495aa1ec88521fbda57c2a055daa3")
+LASTFM_API_URL = "http://ws.audioscrobbler.com/2.0/"
+
 def discover_new_artist(seed_artist, mode):
     """
-    Use Spotify recommendations seeded from seed_artist to find a new
-    artist we don't already know, verify they have enough clean tracks,
-    and add them to the discovered pool for trial.
+    Use Last.fm's artist.getSimilar to find a new artist, then resolve
+    their Spotify ID via sp.search(). Replaces the deprecated Spotify
+    recommendations endpoint.
     """
-    seed_id = ARTISTS.get(seed_artist) or discovered_artists.get(seed_artist, {}).get("id")
-    if not seed_id:
-        print(f"  Discovery: can't find ID for {seed_artist}, skipping.")
+    known_names = set(ARTISTS.keys()) | set(discovered_artists.keys())
+
+    print(f"  Discovery: searching Last.fm for artists similar to {seed_artist}...")
+
+    # Step 1: ask Last.fm for similar artists
+    try:
+        params = urllib.parse.urlencode({
+            "method":      "artist.getSimilar",
+            "artist":      seed_artist,
+            "api_key":     LASTFM_API_KEY,
+            "format":      "json",
+            "limit":       30,
+            "autocorrect": 1,
+        })
+        url = f"{LASTFM_API_URL}?{params}"
+        req = urllib.request.Request(url, headers={"User-Agent": "SpotifyDJ/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        print(f"  Discovery: Last.fm request failed: {e}")
         return
 
-    known_ids = all_known_ids()
-
-    print(f"  Discovery: searching for artists similar to {seed_artist}...")
-
-    results = sp.recommendations(
-        seed_artists=[seed_id],
-        limit=50,
-        market="DE"
-    )
-
-    # Collect candidate artists from recommendation results,
-    # skipping anyone we already know.
-    candidates = {}
-    for track in results.get("tracks", []):
-        for artist in track.get("artists", []):
-            a_id   = artist["id"]
-            a_name = artist["name"]
-            if a_id not in known_ids and a_name not in candidates:
-                candidates[a_name] = a_id
-
-    if not candidates:
-        print(f"  Discovery: no new candidates found for {seed_artist}.")
+    similar = data.get("similarartists", {}).get("artist", [])
+    if not similar:
+        print(f"  Discovery: Last.fm returned no similar artists for {seed_artist}.")
         return
 
-    # Shuffle candidates so we don't always pick the most popular one
-    candidate_list = list(candidates.items())
-    random.shuffle(candidate_list)
+    # Shuffle so we don't always try the same top result
+    random.shuffle(similar)
 
-    for name, artist_id in candidate_list:
+    # Step 2: for each candidate, resolve to a Spotify ID and quality check
+    for entry in similar:
+        name = entry.get("name", "").strip()
+        if not name or name in known_names:
+            continue
+
         print(f"  Discovery: trying candidate '{name}'...")
+
+        # Resolve artist name -> Spotify ID via search
+        try:
+            results = sp.search(q=f"artist:{name}", type="artist", limit=1, market="DE")
+            items = results.get("artists", {}).get("items", [])
+            if not items:
+                print(f"    Not found on Spotify, skipping.")
+                continue
+            artist_obj = items[0]
+            # Verify the name matches reasonably (Spotify search can return wrong artists)
+            if artist_obj["name"].lower() != name.lower():
+                print(f"    Spotify returned '{artist_obj['name']}' instead of '{name}', skipping.")
+                continue
+            artist_id = artist_obj["id"]
+        except Exception as e:
+            print(f"    Spotify search failed: {e}")
+            continue
+
+        # Skip if we already know this Spotify ID under a different name
+        if artist_id in all_known_ids():
+            print(f"    Already in pool under a different name, skipping.")
+            continue
+
+        # Quality check: must have enough clean tracks in DE
         tracks = fetch_artist_tracks_by_id(name, artist_id)
         filtered = select_best_tracks(tracks)
-
         if len(filtered) < DISCOVERY_MIN_TRACKS:
             print(f"    Only {len(filtered)} clean tracks, skipping.")
             continue
@@ -578,7 +611,7 @@ def discover_new_artist(seed_artist, mode):
               f"({len(filtered)} clean tracks).")
         return
 
-    print(f"  Discovery: all candidates failed quality check for {seed_artist}.")
+    print(f"  Discovery: all Last.fm candidates failed quality check for {seed_artist}.")
 
 def record_trial_play(artist):
     """

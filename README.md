@@ -32,7 +32,7 @@ SpotifyDJ/
 - **5 modes** switchable via hotkeys at any time
 - **Smart track filtering** — removes remixes, live versions, sped-up/slowed, language alternate versions, concert recordings, and other alternates automatically
 - **Weight system** — tracks play-through rate per artist per mode and adjusts selection probability over time. Artists you consistently listen through get picked more often; artists you skip get picked less
-- **Artist discovery** — when an artist's weight crosses a threshold, the DJ searches Spotify recommendations for similar artists, quality-checks their catalog, and adds passing candidates to the pool for a trial period. Artists that earn enough play-throughs are permanently saved
+- **Artist discovery** — when an artist's weight crosses a threshold, the DJ queries Last.fm for similar artists, resolves each candidate on Spotify, quality-checks their catalog, and adds passing candidates to the pool for a trial period. Artists that earn enough play-throughs are permanently saved
 - **Continuous playback** — plays songs back to back automatically, picking a new weighted-random artist from the active mode’s pool after each track. Pausing in Spotify stops the DJ without auto-resuming — resume manually via your keyboard, Spotify app, or switch modes to start a new track
 - **Persistent track cache** — fetches each artist's catalog once and caches it for 7 days, keeping API calls near zero during normal use
 - **Persistent recent history** — remembers recently played tracks across restarts to avoid immediate repeats
@@ -63,16 +63,22 @@ pip install -r requirements.txt
 SPOTIFY_CLIENT_ID=your_client_id
 SPOTIFY_CLIENT_SECRET=your_client_secret
 SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
+LASTFM_API_KEY=your_lastfm_api_key
 ```
 
-**5. Register a Spotify app:**
+**5. Register a Last.fm API key** (free, required for artist discovery):
+- Create an account at [last.fm](https://www.last.fm) (use mobile app if the website registration is broken)
+- Go to [last.fm/api/account/create](https://www.last.fm/api/account/create) and fill in any application name
+- Copy the API key into your `.env` as `LASTFM_API_KEY`
+
+**6. Register a Spotify app:**
 - Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
 - Create an app and add `http://127.0.0.1:8888/callback` as a redirect URI
 - Copy the Client ID and Secret into your `.env`
 
-**6. Install AutoHotkey v2** and run `scripts/dj_hotkey.ahk` (can be set to run on startup)
+**7. Install AutoHotkey v2** and run `scripts/dj_hotkey.ahk` (can be set to run on startup)
 
-**7. Open Spotify and start playing anything on your target device, then run:**
+**8. Open Spotify and start playing anything on your target device, then run:**
 ```
 start_dj.bat
 ```
@@ -81,7 +87,7 @@ The first run fetches and caches all artists (~1 minute with rate-limit delays).
 > **Note:** Spotify enforces strict API rate limits. If you hit a limit during the first fetch (startup will print a warning and stop early), the DJ will still run using whichever artists were cached successfully. The missing artists will be retried automatically on the next startup once the ban window expires (can be several hours). Do not delete `track_cache.json` between runs unless necessary.
 
 
-**8. For normal background use:**
+**9. For normal background use:**
 ```
 start_dj_hidden.vbs
 ```
@@ -119,7 +125,7 @@ Weights are clamped between `0.2` (floor) and `3.0` (ceiling). `weighted_choice(
 
 ## How Artist Discovery Works
 
-When an artist's weight reaches `2.0` in any mode, a discovery search is queued for that mode. At the next track boundary the DJ calls Spotify's recommendations API seeded with that artist, filters candidates to those with at least 5 clean (non-alternate) tracks available in DE, and adds the first passing candidate to the pool as a trial artist at weight `1.0`.
+When an artist's weight reaches `2.0` in any mode, a discovery search is queued for that mode. At the next track boundary the DJ queries Last.fm's `artist.getSimilar` endpoint, resolves each candidate's Spotify ID via search, filters candidates to those with at least 5 clean (non-alternate) tracks available in DE, and adds the first passing candidate to the pool as a trial artist at weight `1.0`.
 
 Trial artists need 5 play-throughs of 80%+ to graduate. Graduated artists are permanently saved to `data/discovered_artists.json` and reloaded into pools on every restart.
 

@@ -58,10 +58,16 @@ now_playing = {
     "progress_ms": 0,      # last known Spotify progress_ms, updated each poll
                             # used by judge_last_track() to avoid wall-clock drift
     "is_trial":    False,  # True if the current artist is a non-graduated discovery
+    "uri":         None,   # URI of the track the DJ started, used to detect natural end
 }
 
 # Prevents the pause detection message from printing every 5s loop iteration.
 _pause_logged = False
+
+# Set to True whenever the DJ starts a new track. track_finished() skips its
+# URI check on that same loop iteration to avoid a false positive caused by
+# Spotify API lag (current_playback() still returns the old URI for ~1-2s).
+_just_played = False
 
 track_disk_cache = {}
 
@@ -355,8 +361,13 @@ WEIGHT_PUNISH = -0.10  # penalty for switching away in first 25%
 WEIGHT_MAX    =  3.0   # ceiling — stops one artist dominating forever
 WEIGHT_MIN    =  0.2   # floor — keeps every artist in the rotation
 
-# Weight threshold that triggers a discovery search for a mode
-DISCOVERY_TRIGGER_WEIGHT = 2.0
+# Weight threshold that triggers a discovery search for a mode.
+# Only artists at the ceiling (3.0) are eligible as discovery seeds.
+DISCOVERY_TRIGGER_WEIGHT = 3.0
+
+# Probability of actually queuing a discovery when the threshold is hit.
+# Prevents constant searches as the pool grows large.
+DISCOVERY_CHANCE = 0.25
 
 def update_weight(artist, mode, delta):
     weights = get_mode_memory(mode)
@@ -368,7 +379,8 @@ def update_weight(artist, mode, delta):
 
     # Check if this boost pushed the artist past the discovery threshold
     if delta > 0 and updated >= DISCOVERY_TRIGGER_WEIGHT:
-        queue_discovery(artist, mode)
+        if random.random() < DISCOVERY_CHANCE:
+            queue_discovery(artist, mode)
 
 def judge_last_track(interrupted=False, mode_switch=False):
     """
@@ -414,12 +426,15 @@ def judge_last_track(interrupted=False, mode_switch=False):
         update_weight(artist, mode, WEIGHT_PUNISH)
     # 25–80%: ambiguous, no change
 
-def set_now_playing(artist, mode, duration_ms):
+def set_now_playing(artist, mode, duration_ms, uri=None):
+    global _just_played
     now_playing["artist"]      = artist
     now_playing["mode"]        = mode
     now_playing["duration"]    = duration_ms
     now_playing["started"]     = time.time()
     now_playing["progress_ms"] = 0  # reset so previous track's value doesn't bleed in
+    now_playing["uri"]         = uri
+    _just_played               = True  # suppress track_finished() for this iteration
 
 # =====================
 # DISCOVERY SYSTEM
@@ -849,7 +864,12 @@ def fetch_artist_tracks_by_id(artist_name, artist_id):
 
 def get_artist_tracks(artist_name):
     """Fetch tracks for a permanent artist (looks up ID from ARTISTS dict)."""
-    artist_id = ARTISTS[artist_name]
+    artist_id = ARTISTS.get(artist_name)
+    if not artist_id:
+        # Artist is in a pool but not in ARTISTS — stale cache entry from a
+        # discovery that was later removed. Skip it cleanly instead of crashing.
+        print(f"  {artist_name} not found in ARTISTS dict, skipping.")
+        return []
     try:
         return fetch_artist_tracks_by_id(artist_name, artist_id)
     except RateLimitError:
@@ -958,6 +978,7 @@ def play_artist(name, mode, pool=None, _depth=0, interrupted=True, mode_switch=F
     print(f"DJ -> {name}")
     time.sleep(1)
 
+    tracks = []
     try:
         tracks = get_artist_tracks(name)
         print(f"  fetched: {len(tracks)}")
@@ -990,6 +1011,7 @@ def play_artist(name, mode, pool=None, _depth=0, interrupted=True, mode_switch=F
             artist      = name,
             mode        = mode,
             duration_ms = chosen.get("duration_ms", 0),
+            uri         = chosen.get("uri"),
         )
 
         # If this is a trial artist, check if they earned a trial play
@@ -1030,32 +1052,58 @@ TRACK_COMPLETE_THRESHOLD = 0.85
 
 def track_finished():
     """
-    Returns True only when the current track has played far enough to be
-    considered naturally finished (>= TRACK_COMPLETE_THRESHOLD of its duration)
-    AND Spotify is no longer playing.
+    Returns True when the DJ should advance to the next track.
 
-    This cleanly separates a manual pause (progress low, stopped early) from
-    a natural track end (progress near 100%, then stopped). A paused track
-    will never trigger an auto-advance regardless of how long it sits paused.
-    Resuming via keyboard or Spotify app works normally since the DJ never
-    interferes with a paused track.
+    Two cases:
+    1. Spotify moved to a different track on its own (URI changed) — this
+       happens when a track ends naturally and Spotify auto-advances. The DJ
+       takes over immediately regardless of repeat/loop state.
+    2. Spotify stopped playing entirely AND the track had reached 85%+ —
+       covers edge cases where Spotify pauses at the end instead of advancing.
+
+    Manual pauses are ignored: if the URI hasn't changed and progress is below
+    85%, the DJ waits for the user to resume.
     """
-    global _pause_logged
-    if not auto_mode:
+    global _pause_logged, _just_played
+    if not auto_mode or not now_playing["uri"]:
+        return False
+    # Skip the URI check on the same loop iteration the DJ just started a track.
+    # Spotify API lag means current_playback() still reports the old URI for
+    # ~1-2 seconds, which would cause an immediate false-positive.
+    if _just_played:
+        _just_played = False
         return False
     try:
         pb = sp.current_playback()
-        if pb and pb.get("is_playing") and pb.get("item"):
+        if not pb:
+            return False
+
+        current_uri = pb.get("item", {}).get("uri") if pb.get("item") else None
+
+        if pb.get("is_playing"):
             now_playing["progress_ms"] = pb["progress_ms"]
             if _pause_logged:
                 print("  Playback resumed.")
                 _pause_logged = False
+
+# Set to True whenever the DJ starts a new track. track_finished() skips its
+# URI check on that same loop iteration to avoid a false positive caused by
+# Spotify API lag (current_playback() still returns the old URI for ~1-2s).
+            _just_played = False
+            # If Spotify moved to a different track, the DJ should take over
+            if current_uri and current_uri != now_playing["uri"]:
+                print(f"  Spotify advanced to a new track — DJ taking over.")
+                return True
             return False
-        # Spotify is not playing -- check if the track got far enough
+
+        # Spotify is not playing — check if the URI changed (track ended)
+        if current_uri and current_uri != now_playing["uri"]:
+            print(f"  Track ended and Spotify advanced — DJ taking over.")
+            return True
+
+        # Spotify stopped on the same track — could be a manual pause
         duration = now_playing["duration"]
         progress = now_playing["progress_ms"]
-        # progress_ms is 0 immediately after a track starts, before the first
-        # Spotify poll returns. Skip pause detection until we have real data.
         if duration == 0 or progress == 0:
             return False
         fraction = progress / duration

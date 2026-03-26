@@ -125,7 +125,9 @@ Weights are clamped between `0.2` (floor) and `3.0` (ceiling). `weighted_choice(
 
 ## How Artist Discovery Works
 
-When an artist's weight reaches `2.0` in any mode, a discovery search is queued for that mode. At the next track boundary the DJ queries Last.fm's `artist.getSimilar` endpoint, resolves each candidate's Spotify ID via search, filters candidates to those with at least 5 clean (non-alternate) tracks available in DE, and adds the first passing candidate to the pool as a trial artist at weight `1.0`.
+When an artist's weight reaches `3.0` (the ceiling) in any mode, there is a 25% chance a discovery search is queued for that mode. This means only artists you genuinely love trigger discovery, and the pool grows gradually rather than flooding with new artists every session.
+
+At the next track boundary the DJ queries Last.fm's `artist.getSimilar` endpoint, resolves each candidate's Spotify ID via search, filters candidates to those with at least 5 clean (non-alternate) tracks available in DE, and adds the first passing candidate to the pool as a trial artist at weight `1.0`.
 
 Trial artists need 5 play-throughs of 80%+ to graduate. Graduated artists are permanently saved to `data/discovered_artists.json` and reloaded into pools on every restart.
 

@@ -210,11 +210,14 @@ def ban_current_track():
         if artist and mode:
             update_weight(artist, mode, WEIGHT_PUNISH)
 
-        # Skip immediately — play next track in current mode
+        # Skip immediately — play next track in current mode.
+        # interrupted=False because the weight penalty was already applied
+        # above; passing interrupted=True would cause judge_last_track()
+        # to apply it a second time.
         if auto_mode == "global":
-            play_global_mix(interrupted=True)
+            play_global_mix(interrupted=False)
         elif current_pool:
-            play_from_pool(current_pool, auto_mode, interrupted=True)
+            play_from_pool(current_pool, auto_mode, interrupted=False)
 
     except Exception as e:
         print(f"  Ban failed: {e}")

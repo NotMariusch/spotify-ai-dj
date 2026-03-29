@@ -215,9 +215,9 @@ def ban_current_track():
         # above; passing interrupted=True would cause judge_last_track()
         # to apply it a second time.
         if auto_mode == "global":
-            play_global_mix(interrupted=False)
+            play_global_mix(interrupted=False, banned=True)
         elif current_pool:
-            play_from_pool(current_pool, auto_mode, interrupted=False)
+            play_from_pool(current_pool, auto_mode, interrupted=False, banned=True)
 
     except Exception as e:
         print(f"  Ban failed: {e}")
@@ -385,7 +385,7 @@ def update_weight(artist, mode, delta):
         if random.random() < DISCOVERY_CHANCE:
             queue_discovery(artist, mode)
 
-def judge_last_track(interrupted=False, mode_switch=False):
+def judge_last_track(interrupted=False, mode_switch=False, banned=False):
     """
     Called before every new track starts. Judges whether the previous
     track counts as completed or cut short, and updates weights.
@@ -402,6 +402,9 @@ def judge_last_track(interrupted=False, mode_switch=False):
 
     if mode_switch:
         return  # switching modes is neutral -- no weight change
+
+    if banned:
+        return  # penalty already applied in ban_current_track -- skip judgement
 
     if interrupted:
         update_weight(artist, mode, WEIGHT_PUNISH)
@@ -953,7 +956,7 @@ def select_best_tracks(tracks):
 # PLAY FUNCTIONS
 # =====================
 
-def play_artist(name, mode, pool=None, _depth=0, interrupted=True, mode_switch=False):
+def play_artist(name, mode, pool=None, _depth=0, interrupted=True, mode_switch=False, banned=False):
     max_depth = len(pool) if pool else 1
     if _depth >= max_depth:
         print("  All artists in pool exhausted, skipping this cycle.")
@@ -962,7 +965,7 @@ def play_artist(name, mode, pool=None, _depth=0, interrupted=True, mode_switch=F
     # Before doing anything else, judge the previous track and
     # process any pending discovery searches.
     if _depth == 0:
-        judge_last_track(interrupted=interrupted, mode_switch=mode_switch)
+        judge_last_track(interrupted=interrupted, mode_switch=mode_switch, banned=banned)
         run_pending_discoveries()
 
     # Skip artists that have no cache and couldn't be fetched at startup
@@ -1035,13 +1038,13 @@ def play_artist(name, mode, pool=None, _depth=0, interrupted=True, mode_switch=F
         else:
             time.sleep(2)
 
-def play_from_pool(pool, mode, interrupted=True, mode_switch=False):
-    play_artist(weighted_choice(pool, mode), mode, pool, interrupted=interrupted, mode_switch=mode_switch)
+def play_from_pool(pool, mode, interrupted=True, mode_switch=False, banned=False):
+    play_artist(weighted_choice(pool, mode), mode, pool, interrupted=interrupted, mode_switch=mode_switch, banned=banned)
 
-def play_global_mix(interrupted=True, mode_switch=False):
+def play_global_mix(interrupted=True, mode_switch=False, banned=False):
     artist = weighted_choice(GLOBAL_POOL, "global")
     print(f"Global DJ -> {artist}")
-    play_artist(artist, "global", GLOBAL_POOL, interrupted=interrupted, mode_switch=mode_switch)
+    play_artist(artist, "global", GLOBAL_POOL, interrupted=interrupted, mode_switch=mode_switch, banned=banned)
 
 # =====================
 # TRANSITION CHECK

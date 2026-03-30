@@ -12,6 +12,8 @@ from spotipy.oauth2 import SpotifyOAuth
 from dotenv import load_dotenv
 from pathlib import Path
 from collections import deque
+from ai_request import ask_claude, resolve_artists_to_ids
+from ai_request import ask_claude, resolve_artists_to_ids
 
 # =====================
 # SPOTIFY CONFIG
@@ -48,6 +50,8 @@ MEMORY_VERSION = 1
 
 current_pool = None
 auto_mode    = None
+ai_pool      = []  # list of (name, artist_id) tuples — set by AI requests
+ai_pool      = []  # list of (name, artist_id) tuples — set by AI requests
 
 # Tracks what's currently playing so we can judge it when the next track starts.
 now_playing = {
@@ -956,7 +960,7 @@ def select_best_tracks(tracks):
 # PLAY FUNCTIONS
 # =====================
 
-def play_artist(name, mode, pool=None, _depth=0, interrupted=True, mode_switch=False, banned=False):
+def play_artist(name, mode, pool=None, _depth=0, interrupted=True, mode_switch=False, banned=False, no_judge=False):
     max_depth = len(pool) if pool else 1
     if _depth >= max_depth:
         print("  All artists in pool exhausted, skipping this cycle.")
@@ -965,7 +969,8 @@ def play_artist(name, mode, pool=None, _depth=0, interrupted=True, mode_switch=F
     # Before doing anything else, judge the previous track and
     # process any pending discovery searches.
     if _depth == 0:
-        judge_last_track(interrupted=interrupted, mode_switch=mode_switch, banned=banned)
+        if not no_judge:
+            judge_last_track(interrupted=interrupted, mode_switch=mode_switch, banned=banned)
         run_pending_discoveries()
 
     # Skip artists that have no cache and couldn't be fetched at startup
@@ -1158,29 +1163,80 @@ def run_dj():
             elif choice == "1":
                 auto_mode    = "american_rap"
                 current_pool = AMERICAN_RAP_POOL
+                ai_pool.clear()
                 play_from_pool(current_pool, "american_rap", mode_switch=True)
             elif choice == "2":
                 auto_mode    = "german_trap"
                 current_pool = GERMAN_TRAP_POOL
+                ai_pool.clear()
                 play_from_pool(current_pool, "german_trap", mode_switch=True)
             elif choice == "3":
                 auto_mode    = "kpop"
                 current_pool = KPOP_POOL
+                ai_pool.clear()
                 play_from_pool(current_pool, "kpop", mode_switch=True)
             elif choice == "4":
                 auto_mode    = "jpop"
                 current_pool = JPOP_POOL
+                ai_pool.clear()
                 play_from_pool(current_pool, "jpop", mode_switch=True)
             elif choice == "5":
                 auto_mode = "global"
+                current_pool = None
+                ai_pool.clear()
                 play_global_mix(mode_switch=True)
+
+            elif choice.startswith("ai:"):
+                user_request = choice[3:].strip()
+                if not user_request:
+                    print("  AI: empty request, ignoring.")
+                else:
+                    print(f"  AI request: '{user_request}'")
+                    try:
+                        artist_names = ask_claude(user_request)
+                        print(f"  AI suggested: {artist_names}")
+
+                        # Build artist dict for ID resolution only
+                        all_artists = dict(ARTISTS)
+                        for name, entry in discovered_artists.items():
+                            if name not in all_artists:
+                                all_artists[name] = entry["id"]
+
+                        resolved = resolve_artists_to_ids(sp, artist_names, all_artists)
+                        if not resolved:
+                            print("  AI: no artists could be resolved, ignoring.")
+                        else:
+                            # Store as the active AI pool and start playing
+                            ai_pool.clear()
+                            ai_pool.extend(resolved)
+
+                            # Add any brand-new artists to ARTISTS/GLOBAL_POOL
+                            for name, artist_id in resolved:
+                                if name not in ARTISTS and name not in discovered_artists:
+                                    ARTISTS[name] = artist_id
+                                    GLOBAL_POOL.append(name)
+                                    print(f"  AI: added new artist '{name}' to global pool")
+
+                            name, artist_id = random.choice(ai_pool)
+                            auto_mode    = "global"
+                            current_pool = None
+                            play_artist(name, "global", GLOBAL_POOL, interrupted=True, no_judge=True)
+
+                    except Exception as e:
+                        print(f"  AI request failed: {e}")
+
+            # Clear ai_pool when any mode hotkey is pressed (1-5)
 
         # Resume when the current track has naturally finished.
         # track_finished() only returns True when progress reached 85%+
         # before stopping, so manual pauses are never mistaken for track ends.
         if track_finished():
             print("Track finished -- playing next")
-            if auto_mode == "global":
+            if ai_pool:
+                # AI mode: pick from the AI-suggested pool
+                name, artist_id = random.choice(ai_pool)
+                play_artist(name, "global", GLOBAL_POOL, interrupted=False, no_judge=True)
+            elif auto_mode == "global":
                 play_global_mix(interrupted=False)
             elif current_pool:
                 play_from_pool(current_pool, auto_mode, interrupted=False)

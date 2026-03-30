@@ -51,7 +51,7 @@ MEMORY_VERSION = 1
 current_pool = None
 auto_mode    = None
 ai_pool      = []  # list of (name, artist_id) tuples — set by AI requests
-ai_artists   = {}  # temporary artist_id lookup for AI-only artists, never added to permanent pools
+ai_pool      = []  # list of (name, artist_id) tuples — set by AI requests
 
 # Tracks what's currently playing so we can judge it when the next track starts.
 now_playing = {
@@ -62,6 +62,7 @@ now_playing = {
     "progress_ms": 0,      # last known Spotify progress_ms, updated each poll
                             # used by judge_last_track() to avoid wall-clock drift
     "is_trial":    False,  # True if the current artist is a non-graduated discovery
+    "is_ai_play":  False,  # True if the current track was started by AI mode — never judged
     "uri":         None,   # URI of the track the DJ started, used to detect natural end
 }
 
@@ -409,6 +410,9 @@ def judge_last_track(interrupted=False, mode_switch=False, banned=False):
 
     if banned:
         return  # penalty already applied in ban_current_track -- skip judgement
+
+    if now_playing.get("is_ai_play"):
+        return  # AI mode plays are fully isolated from the weight system
 
     if interrupted:
         update_weight(artist, mode, WEIGHT_PUNISH)
@@ -873,8 +877,8 @@ def fetch_artist_tracks_by_id(artist_name, artist_id):
         return []
 
 def get_artist_tracks(artist_name):
-    """Fetch tracks for an artist. Checks permanent ARTISTS dict and temporary ai_artists dict."""
-    artist_id = ARTISTS.get(artist_name) or ai_artists.get(artist_name)
+    """Fetch tracks for a permanent artist (looks up ID from ARTISTS dict)."""
+    artist_id = ARTISTS.get(artist_name)
     if not artist_id:
         # Artist is in a pool but not in ARTISTS — stale cache entry from a
         # discovery that was later removed. Skip it cleanly instead of crashing.
@@ -1024,6 +1028,7 @@ def play_artist(name, mode, pool=None, _depth=0, interrupted=True, mode_switch=F
             duration_ms = chosen.get("duration_ms", 0),
             uri         = chosen.get("uri"),
         )
+        now_playing["is_ai_play"] = no_judge  # track whether this was an AI mode play
 
         # If this is a trial artist, check if they earned a trial play
         # (We check fraction >= 0.80 lazily on next track via judge_last_track,
@@ -1164,31 +1169,26 @@ def run_dj():
                 auto_mode    = "american_rap"
                 current_pool = AMERICAN_RAP_POOL
                 ai_pool.clear()
-                ai_artists.clear()
                 play_from_pool(current_pool, "american_rap", mode_switch=True)
             elif choice == "2":
                 auto_mode    = "german_trap"
                 current_pool = GERMAN_TRAP_POOL
                 ai_pool.clear()
-                ai_artists.clear()
                 play_from_pool(current_pool, "german_trap", mode_switch=True)
             elif choice == "3":
                 auto_mode    = "kpop"
                 current_pool = KPOP_POOL
                 ai_pool.clear()
-                ai_artists.clear()
                 play_from_pool(current_pool, "kpop", mode_switch=True)
             elif choice == "4":
                 auto_mode    = "jpop"
                 current_pool = JPOP_POOL
                 ai_pool.clear()
-                ai_artists.clear()
                 play_from_pool(current_pool, "jpop", mode_switch=True)
             elif choice == "5":
                 auto_mode = "global"
                 current_pool = None
                 ai_pool.clear()
-                ai_artists.clear()
                 play_global_mix(mode_switch=True)
 
             elif choice.startswith("ai:"):
@@ -1213,14 +1213,14 @@ def run_dj():
                         else:
                             # Store as the active AI pool and start playing
                             ai_pool.clear()
-                            ai_artists.clear()
                             ai_pool.extend(resolved)
 
-                            # Register brand-new artists in ai_artists only — never touch permanent pools
+                            # Add any brand-new artists to ARTISTS/GLOBAL_POOL
                             for name, artist_id in resolved:
                                 if name not in ARTISTS and name not in discovered_artists:
-                                    ai_artists[name] = artist_id
-                                    print(f"  AI: registered temporary artist '{name}'")
+                                    ARTISTS[name] = artist_id
+                                    GLOBAL_POOL.append(name)
+                                    print(f"  AI: added new artist '{name}' to global pool")
 
                             name, artist_id = random.choice(ai_pool)
                             auto_mode    = "global"

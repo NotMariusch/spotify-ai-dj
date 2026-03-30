@@ -1,27 +1,29 @@
 # Spotify AI DJ
 
-A local automated Spotify DJ that runs as a background service on Windows. It selects artists from curated pools, filters tracks, learns your listening preferences over time, and discovers new artists similar to ones you already enjoy.
+A local automated Spotify DJ that runs as a background service on Windows. It selects artists from curated pools, filters tracks, learns your listening preferences over time, discovers new artists similar to ones you already enjoy, and supports natural language requests via an AI chat mode powered by Claude.
 
 ## Project Structure
 
 ```
 SpotifyDJ/
 ├── src/
-│   └── spotify_dj.py           # Main DJ script
+│   ├── spotify_dj.py           # Main DJ script
+│   └── ai_request.py           # Claude API integration for AI chat mode
 ├── scripts/
-│   └── dj_hotkey.ahk           # AutoHotkey hotkey script
+│   ├── dj_hotkey.ahk           # AutoHotkey hotkey script
+│   └── dj_chat.py              # AI chat terminal interface
 ├── data/                        # Runtime data — all gitignored except .gitkeep
 │   ├── track_cache.json         # Cached artist tracks (7 day TTL)
 │   ├── dj_memory.json           # Artist weights per mode
 │   ├── recent_tracks.json       # Recently played titles (persists across restarts)
 │   ├── discovered_artists.json  # Trial and graduated discovered artists
 │   ├── dj.lock                  # Instance lock file (prevents duplicate processes)
-│   ├── dj_input.txt             # Hotkey input (written by AHK, read by DJ)
+│   ├── dj_input.txt             # Hotkey/chat input (written by AHK or dj_chat.py, read by DJ)
 │   ├── banned_tracks.json       # Permanently banned track IDs
-│   └── dj_crash.log             # Crash and exit log
+│   └── dj_crash.log            # Crash and exit log
 ├── start_dj.bat                 # Launch with visible console (for testing)
 ├── start_dj_hidden.vbs          # Launch hidden in background (normal use)
-├── .env                         # Spotify API credentials — never committed
+├── .env                         # API credentials — never committed
 ├── .gitignore
 ├── README.md
 └── requirements.txt
@@ -30,13 +32,14 @@ SpotifyDJ/
 ## Features
 
 - **5 modes** switchable via hotkeys at any time
+- **AI chat mode** — type a natural language request (e.g. "play some chill K-Pop" or "give me hype rap") and the DJ uses Claude to pick matching artists, searches Spotify for them, and plays continuously from that selection until you switch modes or send a new request. AI plays are fully isolated from the weight system
 - **Smart track filtering** — removes remixes, live versions, sped-up/slowed, language alternate versions, concert recordings, and other alternates automatically
 - **Weight system** — tracks play-through rate per artist per mode and adjusts selection probability over time. Artists you consistently listen through get picked more often; artists you skip get picked less
 - **Artist discovery** — when an artist's weight crosses a threshold, the DJ queries Last.fm for similar artists, resolves each candidate on Spotify, quality-checks their catalog, and adds passing candidates to the pool for a trial period. Artists that earn enough play-throughs are permanently saved
-- **Continuous playback** — plays songs back to back automatically, picking a new weighted-random artist from the active mode’s pool after each track. Pausing in Spotify stops the DJ without auto-resuming — resume manually via your keyboard, Spotify app, or switch modes to start a new track
+- **Continuous playback** — plays songs back to back automatically, picking a new weighted-random artist from the active mode's pool after each track. Pausing in Spotify stops the DJ without auto-resuming — resume manually via your keyboard, Spotify app, or switch modes to start a new track
 - **Persistent track cache** — fetches each artist's catalog once and caches it for 7 days, keeping API calls near zero during normal use
 - **Persistent recent history** — remembers recently played tracks across restarts to avoid immediate repeats
-- **Skip hotkey** — F13+6 skips the current track, applies the correct weight penalty, and immediately picks the next track from the active mode’s pool
+- **Skip hotkey** — F13+6 skips the current track, applies the correct weight penalty, and immediately picks the next track from the active mode's pool
 - **Duplicate instance protection** — lock file prevents two instances running simultaneously
 - **Crash recovery** — automatically restarts after unhandled exceptions and logs all crashes and exits to `data/dj_crash.log`
 
@@ -64,6 +67,7 @@ SPOTIFY_CLIENT_ID=your_client_id
 SPOTIFY_CLIENT_SECRET=your_client_secret
 SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
 LASTFM_API_KEY=your_lastfm_api_key
+ANTHROPIC_API_KEY=your_anthropic_api_key
 ```
 
 **5. Register a Last.fm API key** (free, required for artist discovery):
@@ -76,9 +80,14 @@ LASTFM_API_KEY=your_lastfm_api_key
 - Create an app and add `http://127.0.0.1:8888/callback` as a redirect URI
 - Copy the Client ID and Secret into your `.env`
 
-**7. Install AutoHotkey v2** and run `scripts/dj_hotkey.ahk` (can be set to run on startup)
+**7. Get a Claude API key** (required for AI chat mode):
+- Sign up at [console.anthropic.com](https://console.anthropic.com)
+- Add credits (a small amount like $5 lasts hundreds of requests at this usage level)
+- Copy the API key into your `.env` as `ANTHROPIC_API_KEY`
 
-**8. Open Spotify and start playing anything on your target device, then run:**
+**8. Install AutoHotkey v2** and run `scripts/dj_hotkey.ahk` (can be set to run on startup)
+
+**9. Open Spotify and start playing anything on your target device, then run:**
 ```
 start_dj.bat
 ```
@@ -86,12 +95,37 @@ The first run fetches and caches all artists (~1 minute with rate-limit delays).
 
 > **Note:** Spotify enforces strict API rate limits. If you hit a limit during the first fetch (startup will print a warning and stop early), the DJ will still run using whichever artists were cached successfully. The missing artists will be retried automatically on the next startup once the ban window expires (can be several hours). Do not delete `track_cache.json` between runs unless necessary.
 
-
-**9. For normal background use:**
+**10. For normal background use:**
 ```
 start_dj_hidden.vbs
 ```
 This launches the DJ with no visible window. The VBS also prevents duplicate instances from starting.
+
+## AI Chat Mode
+
+With the DJ running, open a second terminal and run:
+```
+python scripts/dj_chat.py
+```
+
+Type any natural language request and press Enter:
+```
+You: play some current pop hits
+You: I want chill anime music
+You: give me hype rap
+You: something dark and moody
+```
+
+The DJ will ask Claude for matching artists, search Spotify for each one, and start playing from that pool continuously. AI plays never affect your weight system — your carefully tuned weights are completely unaffected.
+
+To return to a normal mode, use any hotkey (F13+1 through F13+5) or send a new AI request.
+
+You can also send regular commands through the chat window:
+```
+You: skip
+You: ban
+You: 3        ← switches to K-Pop mode
+```
 
 ## Hotkeys
 
@@ -118,6 +152,7 @@ Each artist starts at weight `1.0` per mode. At every track boundary the DJ judg
 | Skipped or banned in first 25% | -0.10 |
 | Switched between 25–80% | No change |
 | Mode switch (any point) | No change |
+| AI mode play (any point) | No change |
 
 Weights are clamped between `0.2` (floor) and `3.0` (ceiling). `weighted_choice()` uses these as probabilities so higher-weight artists get picked more often without ever fully excluding lower-weight ones.
 

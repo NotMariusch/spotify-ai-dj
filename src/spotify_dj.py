@@ -51,7 +51,7 @@ MEMORY_VERSION = 1
 current_pool = None
 auto_mode    = None
 ai_pool      = []  # list of (name, artist_id) tuples — set by AI requests
-ai_pool      = []  # list of (name, artist_id) tuples — set by AI requests
+ai_artists   = {}  # temporary artist_id lookup for AI-only artists, never added to permanent pools
 
 # Tracks what's currently playing so we can judge it when the next track starts.
 now_playing = {
@@ -873,8 +873,8 @@ def fetch_artist_tracks_by_id(artist_name, artist_id):
         return []
 
 def get_artist_tracks(artist_name):
-    """Fetch tracks for a permanent artist (looks up ID from ARTISTS dict)."""
-    artist_id = ARTISTS.get(artist_name)
+    """Fetch tracks for an artist. Checks permanent ARTISTS dict and temporary ai_artists dict."""
+    artist_id = ARTISTS.get(artist_name) or ai_artists.get(artist_name)
     if not artist_id:
         # Artist is in a pool but not in ARTISTS — stale cache entry from a
         # discovery that was later removed. Skip it cleanly instead of crashing.
@@ -1164,26 +1164,31 @@ def run_dj():
                 auto_mode    = "american_rap"
                 current_pool = AMERICAN_RAP_POOL
                 ai_pool.clear()
+                ai_artists.clear()
                 play_from_pool(current_pool, "american_rap", mode_switch=True)
             elif choice == "2":
                 auto_mode    = "german_trap"
                 current_pool = GERMAN_TRAP_POOL
                 ai_pool.clear()
+                ai_artists.clear()
                 play_from_pool(current_pool, "german_trap", mode_switch=True)
             elif choice == "3":
                 auto_mode    = "kpop"
                 current_pool = KPOP_POOL
                 ai_pool.clear()
+                ai_artists.clear()
                 play_from_pool(current_pool, "kpop", mode_switch=True)
             elif choice == "4":
                 auto_mode    = "jpop"
                 current_pool = JPOP_POOL
                 ai_pool.clear()
+                ai_artists.clear()
                 play_from_pool(current_pool, "jpop", mode_switch=True)
             elif choice == "5":
                 auto_mode = "global"
                 current_pool = None
                 ai_pool.clear()
+                ai_artists.clear()
                 play_global_mix(mode_switch=True)
 
             elif choice.startswith("ai:"):
@@ -1208,14 +1213,14 @@ def run_dj():
                         else:
                             # Store as the active AI pool and start playing
                             ai_pool.clear()
+                            ai_artists.clear()
                             ai_pool.extend(resolved)
 
-                            # Add any brand-new artists to ARTISTS/GLOBAL_POOL
+                            # Register brand-new artists in ai_artists only — never touch permanent pools
                             for name, artist_id in resolved:
                                 if name not in ARTISTS and name not in discovered_artists:
-                                    ARTISTS[name] = artist_id
-                                    GLOBAL_POOL.append(name)
-                                    print(f"  AI: added new artist '{name}' to global pool")
+                                    ai_artists[name] = artist_id
+                                    print(f"  AI: registered temporary artist '{name}'")
 
                             name, artist_id = random.choice(ai_pool)
                             auto_mode    = "global"

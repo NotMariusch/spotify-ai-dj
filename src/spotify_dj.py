@@ -13,7 +13,6 @@ from dotenv import load_dotenv
 from pathlib import Path
 from collections import deque
 from ai_request import ask_claude, resolve_artists_to_ids
-from ai_request import ask_claude, resolve_artists_to_ids
 
 # =====================
 # SPOTIFY CONFIG
@@ -316,7 +315,8 @@ MODE_POOLS = {
 
 def default_memory():
     return {
-        "version": MEMORY_VERSION,
+        "version":    MEMORY_VERSION,
+        "last_decay": None,
         "modes": {
             "american_rap":  {},
             "german_trap":   {},
@@ -332,11 +332,69 @@ def upgrade_memory(data):
     if data["version"] < MEMORY_VERSION:
         print("Upgrading DJ memory...")
         data["version"] = MEMORY_VERSION
+    # Migration: add last_decay if missing (existing files won't have it)
+    if "last_decay" not in data:
+        data["last_decay"] = None
     return data
 
 def save_memory(mem):
     with open(MEMORY_FILE, "w", encoding="utf-8") as f:
         json.dump(mem, f, indent=2)
+
+# How much of the distance to 1.0 decays per week (10%).
+# A weight of 3.0 becomes 3.0 - (3.0 - 1.0) * 0.10 = 2.8 after one week.
+# A weight of 0.3 becomes 0.3 + (1.0 - 0.3) * 0.10 = 0.37 after one week.
+DECAY_RATE_PER_WEEK = 0.10
+
+def apply_weight_decay(mem):
+    """
+    Proportionally decay all weights toward 1.0 based on time elapsed
+    since the last decay. Called once at startup.
+
+    Uses DECAY_RATE_PER_WEEK scaled by actual days elapsed, so the decay
+    is accurate regardless of how long the DJ has been off.
+    """
+    now = time.time()
+    last = mem.get("last_decay")
+
+    if last is None:
+        # First run after adding this feature — just record the timestamp,
+        # don't apply any decay yet since we don't know how much time passed.
+        mem["last_decay"] = now
+        save_memory(mem)
+        print("  Weight decay: initialized (no decay applied on first run).")
+        return
+
+    days_elapsed = (now - last) / 86400
+    if days_elapsed < 1:
+        # Less than a day since last decay — not worth applying.
+        return
+
+    weeks_elapsed = days_elapsed / 7
+    decay_factor  = DECAY_RATE_PER_WEEK * weeks_elapsed
+
+    total_changes = 0
+    for mode, weights in mem["modes"].items():
+        for artist in list(weights.keys()):
+            current = weights[artist]
+            if abs(current - 1.0) < 0.001:
+                continue  # already at neutral, skip
+            distance  = current - 1.0
+            new_weight = current - (distance * decay_factor)
+            new_weight = round(max(0.2, min(3.0, new_weight)), 3)
+            if new_weight != current:
+                weights[artist] = new_weight
+                total_changes += 1
+
+    mem["last_decay"] = now
+    save_memory(mem)
+
+    if total_changes > 0:
+        print(f"  Weight decay: applied over {days_elapsed:.1f} days "
+              f"({decay_factor * 100:.1f}% toward neutral), "
+              f"{total_changes} artist(s) adjusted.")
+    else:
+        print(f"  Weight decay: nothing to adjust ({days_elapsed:.1f} days elapsed).")
 
 def load_memory():
     if not os.path.exists(MEMORY_FILE):
@@ -347,7 +405,7 @@ def load_memory():
         with open(MEMORY_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         data = upgrade_memory(data)
-        save_memory(data)
+        apply_weight_decay(data)
         return data
     except Exception:
         print("Memory corrupted, rebuilding...")
@@ -1102,9 +1160,6 @@ def track_finished():
                 print("  Playback resumed.")
                 _pause_logged = False
 
-# Set to True whenever the DJ starts a new track. track_finished() skips its
-# URI check on that same loop iteration to avoid a false positive caused by
-# Spotify API lag (current_playback() still returns the old URI for ~1-2s).
             _just_played = False
             # If Spotify moved to a different track, the DJ should take over
             if current_uri and current_uri != now_playing["uri"]:

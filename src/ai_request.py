@@ -27,6 +27,8 @@ def ask_claude(user_request: str) -> list[str]:
         "Rules:\n"
         "- Return 5 to 8 artist names.\n"
         "- Match the user's request accurately — genre, mood, and style come first.\n"
+        "- For vague requests like 'gaming music' or 'hype music', interpret freely and pick "
+        "real artists whose music fits that energy (e.g. intense electronic, metal, hip-hop).\n"
         "- Suggest the best artists for the request regardless of any existing library.\n"
         "- Never include song titles, only artist names.\n"
         "- Output must be valid JSON, e.g.: [\"Artist One\", \"Artist Two\", \"Artist Three\"]"
@@ -57,8 +59,22 @@ def ask_claude(user_request: str) -> list[str]:
         method="POST"
     )
 
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    data = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as e:
+            if e.code == 529 and attempt < 2:
+                import time
+                print(f"  Claude overloaded (529), retrying in 3s...")
+                time.sleep(3)
+                continue
+            body = e.read().decode("utf-8")
+            raise ValueError(f"Claude API {e.code}: {body}")
+    if data is None:
+        raise ValueError("Claude API failed after 3 attempts")
 
     raw = data["content"][0]["text"].strip()
 

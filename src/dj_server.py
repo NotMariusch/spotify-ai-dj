@@ -41,6 +41,7 @@ try:
         redirect_uri=os.getenv("SPOTIFY_REDIRECT_URI"),
         scope="user-read-playback-state",
         cache_path=str(BASE_DIR / ".cache"),
+        open_browser=False,
     ), retries=0)
 except Exception as e:
     print(f"[server] Spotify init warning: {e}")

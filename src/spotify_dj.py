@@ -1157,7 +1157,10 @@ def run_dj():
 
             elif choice == "skip":
                 print("Skip hotkey -- playing next track.")
-                if auto_mode == "global":
+                if ai_pool:
+                    name, artist_id = random.choice(ai_pool)
+                    play_artist(name, "global", GLOBAL_POOL, interrupted=True, no_judge=True)
+                elif auto_mode == "global":
                     play_global_mix(interrupted=True)
                 elif current_pool:
                     play_from_pool(current_pool, auto_mode, interrupted=True)

@@ -5,7 +5,7 @@ Press F13+V (Right Ctrl + V) once to start listening, again to stop.
 Works globally — even in fullscreen games.
 Uses Google Speech Recognition (free, no API key needed).
 
-Run this alongside spotify_dj.py in a separate terminal.
+Run this alongside spotify_dj.py or dj_server.py in a separate terminal.
 
 Usage:
     python scripts/dj_voice.py
@@ -20,22 +20,24 @@ import time
 import threading
 import tempfile
 import wave
+import json as _json
+import urllib.request
 import numpy as np
 import sounddevice as sd
 import speech_recognition as sr
 import keyboard
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR   = Path(__file__).resolve().parent.parent
 INPUT_FILE = BASE_DIR / "data" / "dj_input.txt"
 
 SAMPLE_RATE = 16000
-CHANNELS = 1
+CHANNELS    = 1
 
-recording = False
-frames = []
-stream = None
-frames_lock = threading.Lock()
+recording    = False
+frames       = []
+stream       = None
+frames_lock  = threading.Lock()
 
 
 def send_command(text: str):
@@ -43,9 +45,24 @@ def send_command(text: str):
         f.write(text)
 
 
+def log_to_server(msg: str):
+    """Send a log message to the dashboard server (best-effort, silent on failure)."""
+    try:
+        payload = _json.dumps({"msg": msg}).encode("utf-8")
+        req = urllib.request.Request(
+            "http://127.0.0.1:5001/voice_log",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        urllib.request.urlopen(req, timeout=1)
+    except Exception:
+        pass  # server not running — just print to terminal
+
+
 def audio_to_wav(audio: np.ndarray) -> str:
     tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    with wave.open(tmp.name, 'wb') as wf:
+    with wave.open(tmp.name, "wb") as wf:
         wf.setnchannels(CHANNELS)
         wf.setsampwidth(2)
         wf.setframerate(SAMPLE_RATE)
@@ -53,7 +70,7 @@ def audio_to_wav(audio: np.ndarray) -> str:
     return tmp.name
 
 
-def transcribe(wav_path: str) -> str | None:
+def transcribe(wav_path: str):
     r = sr.Recognizer()
     with sr.AudioFile(wav_path) as source:
         audio = r.record(source)
@@ -70,8 +87,10 @@ def transcribe(wav_path: str) -> str | None:
 def start_recording():
     global recording, frames, stream
     recording = True
-    frames = []
-    print("\n  Recording... (press F13+V again to stop)")
+    frames    = []
+    msg = "  Recording... (press F13+V again to stop)"
+    print(msg)
+    log_to_server("🎙 Recording...")
 
     def callback(indata, frame_count, time_info, status):
         if recording:
@@ -81,8 +100,8 @@ def start_recording():
     stream = sd.InputStream(
         samplerate=SAMPLE_RATE,
         channels=CHANNELS,
-        dtype='int16',
-        callback=callback
+        dtype="int16",
+        callback=callback,
     )
     stream.start()
 
@@ -100,21 +119,25 @@ def stop_recording():
 
     if not captured:
         print("  No audio captured.")
+        log_to_server("  No audio captured.")
         return
 
-    audio = np.concatenate(captured, axis=0)
+    audio    = np.concatenate(captured, axis=0)
     wav_path = audio_to_wav(audio)
 
     print("  Transcribing...")
+    log_to_server("  Transcribing...")
     try:
         text = transcribe(wav_path)
     finally:
         os.unlink(wav_path)
 
     if text:
-        print(f"  You said: \"{text}\"")
+        print(f'  You said: "{text}"')
+        log_to_server(f'You said: "{text}"')
         send_command(f"ai:{text}")
         print("  -> Sent to AI DJ.")
+        log_to_server("→ Sent to AI DJ.")
     print()
 
 
@@ -137,7 +160,7 @@ def main():
     print("=" * 50)
     print()
 
-    keyboard.add_hotkey('f13+v', on_hotkey, suppress=True)
+    keyboard.add_hotkey("f13+v", on_hotkey, suppress=True)
 
     print("  Listening for F13+V...")
     print()

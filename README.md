@@ -34,6 +34,7 @@ SpotifyDJ/
 
 - **5 modes** switchable via hotkeys at any time
 - **AI chat mode** — type a natural language request and the DJ uses Claude to pick matching artists, searches Spotify for them, and plays continuously from that selection until you switch modes or send a new request. AI plays are fully isolated from the weight system
+- **Web dashboard** — browser-based control panel at `http://127.0.0.1:5001`. Shows live DJ output and voice/chat logs in real time, displays current artist and track name, active mode indicator, playback status, and buttons for all controls (skip, ban, modes, AI requests)
 - **AI voice mode** — press F13+V (Right Ctrl + V) to start recording, press again to stop. Works globally even in fullscreen games. Transcribed via Google Speech Recognition and sent to the AI DJ
 - **Smart track filtering** — removes remixes, live versions, sped-up/slowed, language alternate versions, concert recordings, and other alternates automatically
 - **Weight system** — tracks play-through rate per artist per mode and adjusts selection probability over time. Artists you consistently listen through get picked more often; artists you skip get picked less

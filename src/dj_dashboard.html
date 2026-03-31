@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SpotifyDJ</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<style>
+  :root {
+    --bg:      #0a0a0c;
+    --surface: #111115;
+    --border:  #1e1e26;
+    --accent:  #1db954;
+    --accent2: #ff4d4d;
+    --accent3: #a78bfa;
+    --text:    #e8e8f0;
+    --muted:   #555566;
+    --warn:    #f59e0b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    height: 100vh;
+    display: grid;
+    grid-template-rows: 72px 1fr 64px;
+    overflow: hidden;
+  }
+
+  /* TOP BAR */
+  header {
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    gap: 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .logo {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 18px;
+    letter-spacing: -0.5px;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  .logo span { color: var(--text); }
+  .now-playing {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+    padding-left: 20px;
+    border-left: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .np-label {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .np-artist {
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: 15px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .np-sep { color: var(--muted); flex-shrink: 0; }
+  .np-track {
+    font-size: 13px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .rec-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--accent2);
+    opacity: 0;
+    transition: opacity 0.2s;
+    flex-shrink: 0;
+  }
+  .rec-indicator.active { opacity: 1; }
+  .rec-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent2);
+    animation: pulse 1s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .mode-badge {
+    margin-left: auto;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    transition: all 0.3s;
+    flex-shrink: 0;
+  }
+  .mode-badge.ai { border-color: var(--accent3); color: var(--accent3); }
+
+  /* PANELS */
+  main {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    overflow: hidden;
+  }
+  .panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-right: 1px solid var(--border);
+  }
+  .panel:last-child { border-right: none; }
+  .panel-header {
+    padding: 10px 16px;
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .panel-header .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 16px;
+    line-height: 1.6;
+  }
+  .log::-webkit-scrollbar { width: 4px; }
+  .log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .log-line {
+    padding: 1px 0;
+    opacity: 0;
+    animation: fadein 0.15s forwards;
+    word-break: break-word;
+  }
+  @keyframes fadein { from{opacity:0;transform:translateY(2px)} to{opacity:1;transform:translateY(0)} }
+  .log-line.dj-pick   { color: var(--accent); font-weight: 500; }
+  .log-line.weight    { color: var(--muted); font-size: 12px; }
+  .log-line.ai-line   { color: var(--accent3); }
+  .log-line.error     { color: var(--accent2); }
+  .log-line.discovery { color: var(--warn); }
+  .log-line.track-end { color: var(--muted); font-style: italic; }
+  .log-line.filter    { color: #7777aa; font-size: 11px; }
+
+  /* AI INPUT */
+  .ai-input-area {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .ai-input-row { display: flex; gap: 8px; }
+  .ai-input {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .ai-input:focus { border-color: var(--accent3); }
+  .ai-input::placeholder { color: var(--muted); }
+  .send-btn {
+    padding: 8px 14px;
+    background: var(--accent3);
+    border: none;
+    border-radius: 6px;
+    color: #fff;
+    font-family: 'Syne', sans-serif;
+    font-weight: 600;
+    font-size: 12px;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+  .send-btn:hover { opacity: 0.85; }
+
+  /* FOOTER */
+  footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 20px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    overflow-x: auto;
+  }
+  footer::-webkit-scrollbar { display: none; }
+  .btn {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+    flex-shrink: 0;
+  }
+  .btn:hover               { border-color: var(--accent); color: var(--accent); }
+  .btn.mode:hover          { border-color: var(--accent); color: var(--accent); }
+  .btn.active-mode         { border-color: var(--accent); color: var(--accent); background: rgba(29,185,84,0.08); }
+  .btn.skip                { border-color: var(--warn); color: var(--warn); }
+  .btn.skip:hover          { background: rgba(245,158,11,0.1); }
+  .btn.ban                 { border-color: var(--accent2); color: var(--accent2); }
+  .btn.ban:hover           { background: rgba(255,77,77,0.1); }
+  .btn.quit                { border-color: #444; color: var(--muted); }
+  .btn.quit:hover          { border-color: var(--accent2); color: var(--accent2); }
+  .btn.playback            { cursor: default; }
+  .divider { width:1px; height:24px; background:var(--border); flex-shrink:0; }
+  .mode-group { display:flex; gap:4px; flex-shrink:0; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">DJ<span>ctrl</span></div>
+  <div class="now-playing">
+    <span class="np-label">Now</span>
+    <span class="np-artist" id="now-artist">—</span>
+    <span class="np-sep" id="now-sep" style="display:none">—</span>
+    <span class="np-track" id="now-track"></span>
+  </div>
+  <div class="rec-indicator" id="rec-indicator">
+    <div class="rec-dot"></div>REC
+  </div>
+  <div class="mode-badge" id="mode-badge">—</div>
+</header>
+
+<main>
+  <div class="panel">
+    <div class="panel-header"><div class="dot"></div>DJ Output</div>
+    <div class="log" id="dj-log"></div>
+  </div>
+  <div class="panel" style="flex-direction:column;display:flex;overflow:hidden;">
+    <div class="panel-header"><div class="dot" style="background:var(--accent3)"></div>Voice / Chat</div>
+    <div class="log" id="voice-log"></div>
+    <div class="ai-input-area">
+      <div class="ai-input-row">
+        <input class="ai-input" id="ai-input" placeholder="Ask the DJ anything..." autocomplete="off"/>
+        <button class="send-btn" onclick="sendAI()">Send</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <button class="btn skip" onclick="sendCmd('skip')">⏭ Skip</button>
+  <button class="btn ban"  onclick="sendCmd('ban')">✕ Ban</button>
+  <div class="divider"></div>
+  <div class="mode-group">
+    <button class="btn mode" id="btn-1"  onclick="sendCmd('1')">Rap</button>
+    <button class="btn mode" id="btn-2"  onclick="sendCmd('2')">DE Trap</button>
+    <button class="btn mode" id="btn-3"  onclick="sendCmd('3')">K-Pop</button>
+    <button class="btn mode" id="btn-4"  onclick="sendCmd('4')">J-Pop</button>
+    <button class="btn mode" id="btn-5"  onclick="sendCmd('5')">Global</button>
+    <button class="btn mode" id="btn-ai" onclick="sendCmd('ai-mode')">AI</button>
+  </div>
+  <div class="divider"></div>
+  <button class="btn playback" id="btn-playback">⏸ Paused</button>
+  <div class="divider"></div>
+  <button class="btn quit" onclick="sendCmd('quit')">Quit DJ</button>
+</footer>
+
+<script>
+  const socket = io();
+  const MAX_LINES = 300;
+  const modeMap = {"American Rap":"btn-1","German Trap":"btn-2","K-Pop":"btn-3","J-Pop":"btn-4","Global":"btn-5","AI":"btn-ai"};
+
+  socket.on("state", (s) => {
+    // Artist
+    document.getElementById("now-artist").textContent = s.current_artist || "—";
+
+    // Track name
+    const track = s.current_track;
+    const sep   = document.getElementById("now-sep");
+    const tEl   = document.getElementById("now-track");
+    if (track && track !== "—") {
+      sep.style.display = "";
+      tEl.textContent   = track;
+    } else {
+      sep.style.display = "none";
+      tEl.textContent   = "";
+    }
+
+    // Mode badge
+    const badge = document.getElementById("mode-badge");
+    badge.textContent = s.mode || "—";
+    badge.className   = "mode-badge" + (s.mode === "AI" ? " ai" : "");
+
+    // Mode buttons
+    document.querySelectorAll(".btn.mode").forEach(b => b.classList.remove("active-mode"));
+    if (modeMap[s.mode]) document.getElementById(modeMap[s.mode])?.classList.add("active-mode");
+
+    // Rec indicator
+    document.getElementById("rec-indicator").classList.toggle("active", !!s.recording);
+
+    // Playback
+    const pb = document.getElementById("btn-playback");
+    if (s.is_playing) {
+      pb.textContent         = "▶ Playing";
+      pb.style.borderColor   = "var(--accent)";
+      pb.style.color         = "var(--accent)";
+    } else {
+      pb.textContent         = "⏸ Paused";
+      pb.style.borderColor   = "#555566";
+      pb.style.color         = "#555566";
+    }
+  });
+
+  socket.on("dj_log",    d => appendLines("dj-log",    d.lines, classifyDJ));
+  socket.on("voice_log", d => appendLines("voice-log", d.lines, classifyVoice));
+
+  function appendLines(id, lines, classifier) {
+    const el       = document.getElementById(id);
+    const atBottom = el.scrollHeight - el.clientHeight <= el.scrollTop + 40;
+    lines.forEach(line => {
+      if (!line.trim()) return;
+      const div = document.createElement("div");
+      div.className   = "log-line " + classifier(line);
+      div.textContent = line;
+      el.appendChild(div);
+    });
+    while (el.children.length > MAX_LINES) el.removeChild(el.firstChild);
+    if (atBottom) el.scrollTop = el.scrollHeight;
+  }
+
+  function classifyDJ(line) {
+    const l = line.toLowerCase();
+    if (/^dj ->|^global dj ->/.test(line))           return "dj-pick";
+    if (/weight \[/.test(line))                       return "weight";
+    if (/ai request|ai suggested|ai artist/.test(l)) return "ai-line";
+    if (/discovery|graduated|trial play/.test(l))    return "discovery";
+    if (/error|failed|exception|traceback/.test(l))  return "error";
+    if (/track finished|playback resumed/.test(l))   return "track-end";
+    if (/fetched:|after filter:|after recent filter:|after ban filter:|device:/.test(l)) return "filter";
+    return "";
+  }
+
+  function classifyVoice(line) {
+    if (line.startsWith("→") || line.startsWith("->")) return "ai-line";
+    if (/you said/i.test(line))                        return "dj-pick";
+    if (/error|failed/.test(line.toLowerCase()))       return "error";
+    return "";
+  }
+
+  function sendCmd(cmd) { socket.emit("command", { cmd }); }
+
+  function sendAI() {
+    const input = document.getElementById("ai-input");
+    const val   = input.value.trim();
+    if (!val) return;
+    socket.emit("command", { cmd: val });
+    input.value = "";
+  }
+
+  document.getElementById("ai-input").addEventListener("keydown", e => {
+    if (e.key === "Enter") sendAI();
+  });
+</script>
+</body>
+</html>

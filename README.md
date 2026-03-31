@@ -11,14 +11,15 @@ SpotifyDJ/
 │   └── ai_request.py           # Claude API integration for AI chat mode
 ├── scripts/
 │   ├── dj_hotkey.ahk           # AutoHotkey hotkey script
-│   └── dj_chat.py              # AI chat terminal interface
+│   ├── dj_chat.py              # AI chat terminal interface (type requests)
+│   └── dj_voice.py             # AI voice interface (F13+V to record)
 ├── data/                        # Runtime data — all gitignored except .gitkeep
 │   ├── track_cache.json         # Cached artist tracks (7 day TTL)
 │   ├── dj_memory.json           # Artist weights per mode
 │   ├── recent_tracks.json       # Recently played titles (persists across restarts)
 │   ├── discovered_artists.json  # Trial and graduated discovered artists
 │   ├── dj.lock                  # Instance lock file (prevents duplicate processes)
-│   ├── dj_input.txt             # Hotkey/chat input (written by AHK or dj_chat.py, read by DJ)
+│   ├── dj_input.txt             # Hotkey/chat input (written by AHK, dj_chat.py, or dj_voice.py)
 │   ├── banned_tracks.json       # Permanently banned track IDs
 │   └── dj_crash.log            # Crash and exit log
 ├── start_dj.bat                 # Launch with visible console (for testing)
@@ -32,7 +33,8 @@ SpotifyDJ/
 ## Features
 
 - **5 modes** switchable via hotkeys at any time
-- **AI chat mode** — type a natural language request (e.g. "play some chill K-Pop" or "give me hype rap") and the DJ uses Claude to pick matching artists, searches Spotify for them, and plays continuously from that selection until you switch modes or send a new request. AI plays are fully isolated from the weight system
+- **AI chat mode** — type a natural language request and the DJ uses Claude to pick matching artists, searches Spotify for them, and plays continuously from that selection until you switch modes or send a new request. AI plays are fully isolated from the weight system
+- **AI voice mode** — press F13+V (Right Ctrl + V) to start recording, press again to stop. Works globally even in fullscreen games. Transcribed via Google Speech Recognition and sent to the AI DJ
 - **Smart track filtering** — removes remixes, live versions, sped-up/slowed, language alternate versions, concert recordings, and other alternates automatically
 - **Weight system** — tracks play-through rate per artist per mode and adjusts selection probability over time. Artists you consistently listen through get picked more often; artists you skip get picked less
 - **Artist discovery** — when an artist's weight crosses a threshold, the DJ queries Last.fm for similar artists, resolves each candidate on Spotify, quality-checks their catalog, and adds passing candidates to the pool for a trial period. Artists that earn enough play-throughs are permanently saved
@@ -80,7 +82,7 @@ ANTHROPIC_API_KEY=your_anthropic_api_key
 - Create an app and add `http://127.0.0.1:8888/callback` as a redirect URI
 - Copy the Client ID and Secret into your `.env`
 
-**7. Get a Claude API key** (required for AI chat mode):
+**7. Get a Claude API key** (required for AI chat/voice mode):
 - Sign up at [console.anthropic.com](https://console.anthropic.com)
 - Add credits (a small amount like $5 lasts hundreds of requests at this usage level)
 - Copy the API key into your `.env` as `ANTHROPIC_API_KEY`
@@ -127,20 +129,41 @@ You: ban
 You: 3        ← switches to K-Pop mode
 ```
 
+## AI Voice Mode
+
+With the DJ running, open a second terminal and run:
+```
+python scripts/dj_voice.py
+```
+
+Press **F13+V** (Right Ctrl + V) once to start recording, press again to stop. The voice input is transcribed by Google Speech Recognition (free, no API key needed) and sent to Claude as an AI request — same as typing in the chat window.
+
+Works globally even when you are tabbed into a fullscreen game. The terminal window just needs to stay open in the background.
+
+**Tips for best results:**
+- Describe the vibe rather than naming specific artists — "play some German trap" works better than naming artists directly, since speech recognition may mishear artist names
+- Claude will pick the right artists based on your description regardless
+
+Voice mode requires two additional packages:
+```
+pip install sounddevice numpy keyboard
+```
+
 ## Hotkeys
 
 Requires AutoHotkey v2 running `scripts/dj_hotkey.ahk`. Right Ctrl is remapped to F13 to avoid conflicts in games.
 
-| Hotkey | Mode | Artists |
-|--------|------|---------|
-| F13 + 1 | American Rap | Juice WRLD, XXXTENTACION, Ski Mask, A Boogie |
-| F13 + 2 | German Trap | tj_beastboy, Sierra Kidd |
-| F13 + 3 | K-Pop | LE SSERAFIM, BLACKPINK, NewJeans, K/DA, aespa |
-| F13 + 4 | J-Pop | Ado, YOASOBI, Eve, BABYMETAL, Aimer |
-| F13 + 5 | Global | All artists, weighted random |
-| F13 + 6 | Skip current track | |
-| F13 + 8 | Ban current track permanently | |
-| F13 + 9 | Quit DJ cleanly | |
+| Hotkey | Action |
+|--------|--------|
+| F13 + 1 | American Rap mode (Juice WRLD, XXXTENTACION, Ski Mask, A Boogie) |
+| F13 + 2 | German Trap mode (tj_beastboy, Sierra Kidd) |
+| F13 + 3 | K-Pop mode (LE SSERAFIM, BLACKPINK, NewJeans, K/DA, aespa) |
+| F13 + 4 | J-Pop mode (Ado, YOASOBI, Eve, BABYMETAL, Aimer) |
+| F13 + 5 | Global mode (all artists, weighted random) |
+| F13 + 6 | Skip current track |
+| F13 + 8 | Ban current track permanently |
+| F13 + 9 | Quit DJ cleanly |
+| F13 + V | Toggle voice recording (via dj_voice.py) |
 
 ## How the Weight System Works
 

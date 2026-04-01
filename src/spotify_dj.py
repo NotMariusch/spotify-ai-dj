@@ -739,6 +739,7 @@ def connect():
             redirect_uri=REDIRECT_URI,
             scope=SCOPE,
             open_browser=False,
+            cache_path=os.path.join(BASE_DIR, ".cache"),
         ),
         retries=0,        # disable Spotipy's internal retry/backoff so 429s
         backoff_factor=0, # raise immediately as SpotifyException instead of blocking

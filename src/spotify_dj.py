@@ -732,19 +732,15 @@ def record_trial_play(artist):
 # =====================
 
 def connect():
-    sp = spotipy.Spotify(
-        auth_manager=SpotifyOAuth(
-            client_id=CLIENT_ID,
-            client_secret=CLIENT_SECRET,
-            redirect_uri=REDIRECT_URI,
-            scope=SCOPE,
-            open_browser=False,
-            cache_path=os.path.join(BASE_DIR, ".cache"),
-        ),
-        retries=0,        # disable Spotipy's internal retry/backoff so 429s
-        backoff_factor=0, # raise immediately as SpotifyException instead of blocking
+    auth_manager = SpotifyOAuth(
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET,
+        redirect_uri=REDIRECT_URI,
+        scope=SCOPE,
+        open_browser=False,
+        cache_path=os.path.join(BASE_DIR, ".cache-dj"),
     )
-    # Verify at least one device is reachable before returning
+    sp = spotipy.Spotify(auth_manager=auth_manager, retries=0, backoff_factor=0)
     for attempt in range(5):
         if sp.devices().get("devices"):
             return sp

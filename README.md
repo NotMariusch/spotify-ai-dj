@@ -8,7 +8,9 @@ A local automated Spotify DJ that runs as a background service on Windows. It se
 SpotifyDJ/
 ├── src/
 │   ├── spotify_dj.py           # Main DJ script
-│   └── ai_request.py           # Claude API integration for AI chat mode
+│   ├── ai_request.py           # Claude API integration for AI chat mode
+│   ├── dj_server.py            # Flask/websockets dashboard server
+│   └── dj_dashboard.html       # Browser dashboard UI
 ├── scripts/
 │   ├── dj_hotkey.ahk           # AutoHotkey hotkey script
 │   ├── dj_chat.py              # AI chat terminal interface (type requests)
@@ -22,8 +24,11 @@ SpotifyDJ/
 │   ├── dj_input.txt             # Hotkey/chat input (written by AHK, dj_chat.py, or dj_voice.py)
 │   ├── banned_tracks.json       # Permanently banned track IDs
 │   └── dj_crash.log            # Crash and exit log
+├── .cache                       # Spotify OAuth token for dj_server.py (gitignored)
+├── .cache-dj                    # Spotify OAuth token for spotify_dj.py (gitignored)
 ├── start_dj.bat                 # Launch with visible console (for testing)
 ├── start_dj_hidden.vbs          # Launch hidden in background (normal use)
+├── start_voice_hidden.vbs       # Launch voice mode hidden in background
 ├── .env                         # API credentials — never committed
 ├── .gitignore
 ├── README.md
@@ -38,6 +43,7 @@ SpotifyDJ/
 - **AI voice mode** — press F13+V (Right Ctrl + V) to start recording, press again to stop. Works globally even in fullscreen games. Transcribed via Google Speech Recognition and sent to the AI DJ
 - **Smart track filtering** — removes remixes, live versions, sped-up/slowed, language alternate versions, concert recordings, and other alternates automatically
 - **Weight system** — tracks play-through rate per artist per mode and adjusts selection probability over time. Artists you consistently listen through get picked more often; artists you skip get picked less
+- **Weight decay** — artist weights drift back toward neutral (1.0) over time so old boosts and penalties don't last forever. Applied automatically on each startup based on days elapsed since last run
 - **Artist discovery** — when an artist's weight crosses a threshold, the DJ queries Last.fm for similar artists, resolves each candidate on Spotify, quality-checks their catalog, and adds passing candidates to the pool for a trial period. Artists that earn enough play-throughs are permanently saved
 - **Continuous playback** — plays songs back to back automatically, picking a new weighted-random artist from the active mode's pool after each track. Pausing in Spotify stops the DJ without auto-resuming — resume manually via your keyboard, Spotify app, or switch modes to start a new track
 - **Persistent track cache** — fetches each artist's catalog once and caches it for 7 days, keeping API calls near zero during normal use
@@ -90,7 +96,17 @@ ANTHROPIC_API_KEY=your_anthropic_api_key
 
 **8. Install AutoHotkey v2** and run `scripts/dj_hotkey.ahk` (can be set to run on startup)
 
-**9. Open Spotify and start playing anything on your target device, then run:**
+**9. Authorize Spotify for the DJ script (one-time setup):**
+
+`spotify_dj.py` uses a separate token cache (`.cache-dj`) from the dashboard server. You need to authorize it once manually before running it through the dashboard, otherwise it will crash silently because it has no console to prompt you in.
+
+Open a terminal in the project root and run:
+```
+python src\spotify_dj.py
+```
+It will print an authorization URL. Open it in your browser, authorize the app, then paste the redirect URL back into the terminal. Once done, press Ctrl+C to stop the script. The `.cache-dj` file is now created and the DJ will authorize silently from this point forward.
+
+**10. Open Spotify and start playing anything on your target device, then start the dashboard:**
 ```
 start_dj.bat
 ```
@@ -98,7 +114,7 @@ The first run fetches and caches all artists (~1 minute with rate-limit delays).
 
 > **Note:** Spotify enforces strict API rate limits. If you hit a limit during the first fetch (startup will print a warning and stop early), the DJ will still run using whichever artists were cached successfully. The missing artists will be retried automatically on the next startup once the ban window expires (can be several hours). Do not delete `track_cache.json` between runs unless necessary.
 
-**10. For normal background use:**
+**11. For normal background use:**
 ```
 start_dj_hidden.vbs
 ```
@@ -180,6 +196,8 @@ Each artist starts at weight `1.0` per mode. At every track boundary the DJ judg
 
 Weights are clamped between `0.2` (floor) and `3.0` (ceiling). `weighted_choice()` uses these as probabilities so higher-weight artists get picked more often without ever fully excluding lower-weight ones.
 
+**Weight decay:** On each startup, all weights drift 10% of the distance to 1.0 per week elapsed since the last run. A weight of 3.0 becomes ~2.8 after one week, and a weight of 0.3 becomes ~0.37. This prevents old boosts and penalties from becoming permanent over time.
+
 **To reset all weights:** delete `data/dj_memory.json`
 
 ## How Artist Discovery Works
@@ -200,3 +218,5 @@ Trial artists need 5 play-throughs of 80%+ to graduate. Graduated artists are pe
 | `discovered_artists.json` | Discovered/graduated artists | Yes — discovery history lost |
 | `banned_tracks.json` | Permanently banned track IDs | Yes — all bans cleared |
 | `dj_crash.log` | Crash and exit log | Yes — safe to delete anytime |
+| `.cache` | Spotify token for dj_server.py | Yes — re-authorized automatically on next start |
+| `.cache-dj` | Spotify token for spotify_dj.py | Yes — requires one-time manual reauth (see Setup step 9) |

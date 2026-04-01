@@ -737,7 +737,8 @@ def connect():
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             redirect_uri=REDIRECT_URI,
-            scope=SCOPE
+            scope=SCOPE,
+            open_browser=False,
         ),
         retries=0,        # disable Spotipy's internal retry/backoff so 429s
         backoff_factor=0, # raise immediately as SpotifyException instead of blocking

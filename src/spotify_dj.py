@@ -1277,11 +1277,29 @@ def run_dj():
                             ai_artists.clear()
                             ai_pool.extend(resolved)
 
-                            # Add any brand-new artists to ARTISTS/GLOBAL_POOL
+                            # Add any brand-new artists to ai_artists and
+                            # prewarm their track cache with delays to avoid
+                            # triggering Spotify's rate limit ban.
                             for name, artist_id in resolved:
                                 if name not in ARTISTS and name not in discovered_artists:
                                     ai_artists[name] = artist_id
                                     print(f"  AI: registered temporary artist '{name}'")
+                            
+                            uncached = [
+                                (name, artist_id) for name, artist_id in resolved
+                                if name not in track_disk_cache or
+                                (time.time() - track_disk_cache[name]["fetched_at"]) / 86400 >= CACHE_TTL_DAYS
+                            ]
+                            if uncached:
+                                print(f"  AI: pre-fetching {len(uncached)} uncached artist(s)...")
+                                for name, artist_id in uncached:
+                                    print(f"  AI: fetching {name}...")
+                                    try:
+                                        fetch_artist_tracks_by_id(name, artist_id)
+                                    except RateLimitError as e:
+                                        print(f"  AI: rate limited fetching {name}, skipping remaining.")
+                                        break
+                                    time.sleep(2 + random.uniform(0, 1.5))
 
                             name, artist_id = random.choice(ai_pool)
                             auto_mode    = "global"

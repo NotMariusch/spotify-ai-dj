@@ -1100,6 +1100,8 @@ def play_artist(name, mode, pool=None, _depth=0, interrupted=True, mode_switch=F
         save_recent()
 
         safe_play(uris=[chosen["uri"]])
+        print(f"NOW_PLAYING:{chosen['name']}")
+        print("IS_PLAYING:true")
 
         # Record what's now playing for weight judgement next time
         set_now_playing(
@@ -1180,6 +1182,7 @@ def track_finished():
             now_playing["progress_ms"] = pb["progress_ms"]
             if _pause_logged:
                 print("  Playback resumed.")
+                print("IS_PLAYING:true")
                 _pause_logged = False
 
             _just_played = False
@@ -1205,6 +1208,7 @@ def track_finished():
                 print(f"  Paused at {progress / 1000:.0f}s / {duration / 1000:.0f}s "
                       f"({fraction * 100:.0f}%) -- waiting for manual resume.")
                 _pause_logged = True
+                print("IS_PLAYING:false")
             return False
         return True
     except Exception:

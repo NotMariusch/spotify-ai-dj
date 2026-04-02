@@ -20,8 +20,6 @@ import threading
 import queue
 import time
 import re
-import spotipy
-from spotipy.oauth2 import SpotifyOAuth
 from dotenv import load_dotenv
 from pathlib import Path
 from flask import Flask, request
@@ -32,20 +30,6 @@ INPUT_FILE = BASE_DIR / "data" / "dj_input.txt"
 DJ_SCRIPT  = BASE_DIR / "src" / "spotify_dj.py"
 
 load_dotenv(BASE_DIR / ".env")
-
-# Spotify client for track polling (read-only scope)
-try:
-    _sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
-        client_id=os.getenv("SPOTIFY_CLIENT_ID"),
-        client_secret=os.getenv("SPOTIFY_CLIENT_SECRET"),
-        redirect_uri=os.getenv("SPOTIFY_REDIRECT_URI"),
-        scope="user-read-playback-state",
-        cache_path=str(BASE_DIR / ".cache"),
-        open_browser=False,
-    ), retries=0)
-except Exception as e:
-    print(f"[server] Spotify init warning: {e}")
-    _sp = None
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "spotifydj-dashboard"
@@ -76,6 +60,10 @@ def parse_dj_line(line: str):
     if re.search(r"AI request:", line):
         state["current_artist"] = "AI Mode"
         state["mode"] = "AI"
+    if line.startswith("NOW_PLAYING:"):
+        state["current_track"] = line[len("NOW_PLAYING:"):]
+    if line.startswith("IS_PLAYING:"):
+        state["is_playing"] = line[len("IS_PLAYING:"):] == "true"
 
 
 def launch_dj():
@@ -112,10 +100,7 @@ def launch_dj():
 
 # ── Broadcast loop ──
 
-_sp_poll_counter = 0
-
 def broadcast_loop():
-    global _sp_poll_counter
     while True:
         try:
             # DJ log
@@ -137,21 +122,6 @@ def broadcast_loop():
                     break
             if vlines:
                 socketio.emit("voice_log", {"lines": vlines}, namespace="/")
-
-            # Poll Spotify every ~2s (every 8 ticks at 0.25s)
-            _sp_poll_counter += 1
-            if _sp_poll_counter >= 8:
-                _sp_poll_counter = 0
-                if _sp:
-                    try:
-                        pb = _sp.current_playback()
-                        if pb and pb.get("item"):
-                            state["current_track"] = pb["item"]["name"]
-                            state["is_playing"]    = pb.get("is_playing", False)
-                        elif pb:
-                            state["is_playing"] = pb.get("is_playing", False)
-                    except Exception:
-                        pass
 
             socketio.emit("state", state, namespace="/")
         except Exception as e:

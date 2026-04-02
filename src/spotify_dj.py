@@ -1016,15 +1016,10 @@ def select_best_tracks(tracks):
     for t in tracks:
         if t["album"]["album_type"] in ["compilation", "appears_on"]:
             continue
-        if any(w in t["album"]["name"].lower() for w in [
-            "tour", "live", "concert", "arena", "dome", "stadium", "festival"
-        ]):
+        if any(w in t["album"]["name"].lower() for w in
+               ALBUM_KEYWORDS_WORD + ALBUM_KEYWORDS_SUBSTR):
             continue
         if is_alternate_version(t):
-            continue
-
-        track_artist_ids = {a["id"] for a in t.get("artists", [])}
-        if track_artist_ids & BLOCKED_ARTIST_IDS:
             continue
 
         track_artist_ids = {a["id"] for a in t.get("artists", [])}
@@ -1106,10 +1101,14 @@ def play_artist(name, mode, pool=None, _depth=0, interrupted=True, mode_switch=F
 
         chosen = random.choice(tracks)
 
-        # Build full artist string including features
-        all_artists = ", ".join(a["name"] for a in chosen["artists"])
-        print(f"  {name} — {chosen['name']} (ft. {all_artists})" if len(chosen["artists"]) > 1
-              else f"  {name} — {chosen['name']}")
+        # Build co-artist suffix only if not already mentioned in track name
+        track_name_lower = chosen["name"].lower()
+        features_in_title = any(kw in track_name_lower for kw in ["feat", "ft.", "with "])
+        if len(chosen["artists"]) > 1 and not features_in_title:
+            co_artists = ", ".join(a["name"] for a in chosen["artists"][1:])
+            print(f"  {name} — {chosen['name']} (ft. {co_artists})")
+        else:
+            print(f"  {name} — {chosen['name']}")
         
         recent_titles.append(normalize_title(chosen["name"]))
         recent_artists.append(chosen["artists"][0]["name"])

@@ -115,6 +115,7 @@ TRACK_KEYWORDS_WORD = [
     "remix", "live", "edit", "clean", "demo", "acoustic",
     "instrumental", "karaoke", "nightcore", "extended",
     "censored", "remaster", "remastered", "reverb",
+    "interlude", "skit", "intro", "outro",
 ]
 
 TRACK_KEYWORDS_SUBSTR = [
@@ -1026,6 +1027,14 @@ def select_best_tracks(tracks):
         if track_artist_ids & BLOCKED_ARTIST_IDS:
             continue
 
+        track_artist_ids = {a["id"] for a in t.get("artists", [])}
+        if track_artist_ids & BLOCKED_ARTIST_IDS:
+            continue
+
+        # Skip tracks shorter than 90 seconds (intros, skits, talking tracks)
+        if t.get("duration_ms", 0) < 90000:
+            continue
+
         title     = normalize_title(t["name"])
         score_new = (1 if t.get("explicit", False) else 0) * 3 \
                   + (1 if t["album"]["album_type"] == "single" else 0) * 2 \
@@ -1096,7 +1105,12 @@ def play_artist(name, mode, pool=None, _depth=0, interrupted=True, mode_switch=F
             raise Exception("No tracks left after filtering")
 
         chosen = random.choice(tracks)
-        print(f"  playing: {chosen['name']}")
+
+        # Build full artist string including features
+        all_artists = ", ".join(a["name"] for a in chosen["artists"])
+        print(f"  {name} — {chosen['name']} (ft. {all_artists})" if len(chosen["artists"]) > 1
+              else f"  {name} — {chosen['name']}")
+        
         recent_titles.append(normalize_title(chosen["name"]))
         recent_artists.append(chosen["artists"][0]["name"])
         save_recent()

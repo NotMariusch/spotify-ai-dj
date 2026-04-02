@@ -121,7 +121,7 @@ TRACK_KEYWORDS_SUBSTR = [
 ]
 
 ALBUM_KEYWORDS_WORD = [
-    "tour", "concert", "arena", "stadium", "festival", "anniversary",
+    "tour", "concert", "arena", "stadium", "festival", "anniversary", "soundtrack", "vocaloid",
 ]
 
 LANGUAGE_VERSION_PATTERN = re.compile(
@@ -133,7 +133,26 @@ LANGUAGE_VERSION_PATTERN = re.compile(
 ALBUM_KEYWORDS_SUBSTR = [
     "tokyo dome",
     "world tour",
+    "original soundtrack",
+    "サウンドトラック",
+    "ost",
+    "sound track",
 ]
+
+BLOCKED_ARTIST_IDS = {
+    "6pNgnvzBa6Bthsv8SrZJYl",  # Hatsune Miku (main)
+    "3hZDdhpZycP7DbqHV58RD6",  # Hatsune Miku (alternate profile)
+    "2XEx6N3gknSmtshM0PVuxu",  # GUMI
+    "7wZ6E8iVwjGYRGwSfkIAjP",  # Kagamine Rin
+    "2GXfF7OsKmE87OBfZ69cFY",  # Kagamine Len
+    "2rh169c2dYzbplqrEwDqsk",  # Kagamine Rin & Kagamine Len (combined profile)
+    "7CWdEBRTF2C44GfX1GmSc2",  # KAITO
+    "2IkmuwBBKvBWsJjzyUsvhp",  # MEIKO
+    "1oz1HYOyJhjshPi5Nvs3MX",  # IA
+    "7HwMt9qpoww4yfE3D8886I",  # Megurine Luka
+    "4JX0GdKx8EduY2Ck7qac4H",  # Kasane Teto
+    "7Al85ZdCo2ZoQiBghDSj7o",  # 重音テト (Kasane Teto Japanese profile)
+}
 
 recent_titles  = deque(maxlen=30)
 recent_artists = deque(maxlen=10)
@@ -1001,6 +1020,10 @@ def select_best_tracks(tracks):
         if is_alternate_version(t):
             continue
 
+        track_artist_ids = {a["id"] for a in t.get("artists", [])}
+        if track_artist_ids & BLOCKED_ARTIST_IDS:
+            continue
+
         title     = normalize_title(t["name"])
         score_new = (1 if t.get("explicit", False) else 0) * 3 \
                   + (1 if t["album"]["album_type"] == "single" else 0) * 2 \
@@ -1071,6 +1094,7 @@ def play_artist(name, mode, pool=None, _depth=0, interrupted=True, mode_switch=F
             raise Exception("No tracks left after filtering")
 
         chosen = random.choice(tracks)
+        print(f"  playing: {chosen['name']}")
         recent_titles.append(normalize_title(chosen["name"]))
         recent_artists.append(chosen["artists"][0]["name"])
         save_recent()

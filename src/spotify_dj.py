@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import json
 import random
@@ -18,8 +19,8 @@ from ai_request import ask_claude, resolve_artists_to_ids
 # SPOTIFY CONFIG
 # =====================
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BASE_DIR / ".env")
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 CLIENT_ID     = os.getenv("SPOTIFY_CLIENT_ID")
 CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
@@ -33,8 +34,6 @@ SCOPE = "user-modify-playback-state user-read-playback-state"
 
 # AUTO_INTERVAL and SMOOTH_THRESHOLD removed -- smooth transition replaced
 # by track_finished() which resumes immediately when a track ends naturally.
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 MEMORY_FILE        = os.path.join(BASE_DIR, "data", "dj_memory.json")
 INPUT_FILE         = os.path.join(BASE_DIR, "data", "dj_input.txt")
@@ -84,6 +83,10 @@ class RateLimitError(Exception):
 # Artists that had no cache entry AND couldn't be fetched due to rate limiting.
 # They stay in their pools but are skipped during play until successfully fetched.
 uncached_artists = set()
+
+# Tracks when a rate limit ban expires so track_finished() can skip
+# API calls while banned rather than hammering the endpoint.
+_rate_limit_until = 0.0
 
 # =====================
 # DISK CACHE
@@ -135,7 +138,6 @@ ALBUM_KEYWORDS_SUBSTR = [
     "world tour",
     "original soundtrack",
     "サウンドトラック",
-    "ost",
     "sound track",
 ]
 
@@ -804,20 +806,21 @@ sp = connect()
 DEBUG_MODE = os.getenv("DJ_DEBUG", "0") == "1"
 
 def safe_play(**kwargs):
+    global sp, _rate_limit_until
+
     if DEBUG_MODE:
         print(f"[DEBUG] Would play: {kwargs}")
         return
-
-    global sp
 
     try:
         sp.start_playback(device_id=get_active_device_id(), **kwargs)
     except spotipy.exceptions.SpotifyException as e:
         if e.http_status == 429:
-            wait = int(e.headers.get("Retry-After", 30))
+            wait = int(e.headers.get("Retry-After", 30)) if e.headers else 30
+            _rate_limit_until = time.time() + wait
             print(f"Rate limit hit in safe_play. Waiting {wait}s...")
             time.sleep(wait)
-            sp.start_playback(device_id=get_active_device_id(), **kwargs)  # retry after wait
+            sp.start_playback(device_id=get_active_device_id(), **kwargs)
             return
         print(f"Playback error ({e.http_status}), reconnecting...")
         sp = connect()
@@ -941,8 +944,7 @@ def fetch_artist_tracks_by_id(artist_name, artist_id):
         )
         if is_rate_limit:
             # Try to extract Retry-After from the message (e.g. "...after: 22347 s")
-            import re as _re
-            match = _re.search(r"(\d+)\s*s", msg)
+            match = re.search(r"(\d+)\s*s", msg)
             wait = int(match.group(1)) if match else (
                 int(e.headers.get("Retry-After", 30)) if hasattr(e, "headers") and e.headers else 30
             )
@@ -1162,8 +1164,11 @@ def track_finished():
     Manual pauses are ignored: if the URI hasn't changed and progress is below
     85%, the DJ waits for the user to resume.
     """
-    global _pause_logged, _just_played
+    global _pause_logged, _just_played, _rate_limit_until
     if not auto_mode or not now_playing["uri"]:
+        return False
+    # Skip all API calls while rate limited
+    if time.time() < _rate_limit_until:
         return False
     # Skip the URI check on the same loop iteration the DJ just started a track.
     # Spotify API lag means current_playback() still reports the old URI for
@@ -1174,6 +1179,10 @@ def track_finished():
     try:
         pb = sp.current_playback()
         if not pb:
+            # No playback data — emit paused state so dashboard updates
+            if not _pause_logged:
+                print("IS_PLAYING:false")
+                _pause_logged = True
             return False
 
         current_uri = pb.get("item", {}).get("uri") if pb.get("item") else None
@@ -1201,6 +1210,9 @@ def track_finished():
         duration = now_playing["duration"]
         progress = now_playing["progress_ms"]
         if duration == 0 or progress == 0:
+            if not _pause_logged:
+                print("IS_PLAYING:false")
+                _pause_logged = True
             return False
         fraction = progress / duration
         if fraction < TRACK_COMPLETE_THRESHOLD:
@@ -1211,6 +1223,12 @@ def track_finished():
                 print("IS_PLAYING:false")
             return False
         return True
+    except spotipy.exceptions.SpotifyException as e:
+        if e.http_status == 429:
+            wait = int(e.headers.get("Retry-After", 30)) if e.headers else 30
+            _rate_limit_until = time.time() + wait
+            print(f"  Rate limit in track_finished(). Pausing polls for {wait}s.")
+        return False
     except Exception:
         return False
 
@@ -1233,7 +1251,6 @@ def run_dj():
 
             if choice == "quit":
                 print("DJ shutting down via hotkey.")
-                import sys
                 sys.exit(0)
 
             elif choice == "skip":

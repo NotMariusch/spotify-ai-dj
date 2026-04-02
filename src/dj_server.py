@@ -91,7 +91,8 @@ def launch_dj():
         for line in dj_process.stdout:
             line = line.rstrip("\n")
             parse_dj_line(line)
-            dj_log_queue.put(line)
+            if not line.startswith(("NOW_PLAYING:", "IS_PLAYING:")):
+                dj_log_queue.put(line)
         dj_process.wait()
         dj_log_queue.put("[DJ process exited]")
 

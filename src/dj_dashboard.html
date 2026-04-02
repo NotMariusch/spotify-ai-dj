@@ -276,8 +276,7 @@
 </main>
 
 <footer>
-  <button class="btn skip" onclick="sendCmd('skip')">⏭ Skip</button>
-  <button class="btn ban"  onclick="sendCmd('ban')">✕ Ban</button>
+  <button class="btn mode" id="btn-ai" onclick="sendCmd('ai-mode')">AI</button>
   <div class="divider"></div>
   <div class="mode-group">
     <button class="btn mode" id="btn-1"  onclick="sendCmd('1')">Rap</button>
@@ -285,12 +284,14 @@
     <button class="btn mode" id="btn-3"  onclick="sendCmd('3')">K-Pop</button>
     <button class="btn mode" id="btn-4"  onclick="sendCmd('4')">J-Pop</button>
     <button class="btn mode" id="btn-5"  onclick="sendCmd('5')">Global</button>
-    <button class="btn mode" id="btn-ai" onclick="sendCmd('ai-mode')">AI</button>
   </div>
   <div class="divider"></div>
-  <button class="btn playback" id="btn-playback">⏸ Paused</button>
-  <div class="divider"></div>
+  <button class="btn skip" onclick="sendCmd('skip')">⏭ Skip</button>
+  <button class="btn ban"  onclick="sendCmd('ban-artist')">✕ Ban Artist</button>
+  <button class="btn ban"  onclick="sendCmd('ban')">✕ Ban Track</button>
   <button class="btn quit" onclick="sendCmd('quit')">Quit DJ</button>
+  <div class="divider"></div>
+  <button class="btn playback" id="btn-playback">⏸ Paused</button>
 </footer>
 
 <script>

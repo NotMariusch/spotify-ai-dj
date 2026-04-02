@@ -42,6 +42,7 @@ DISCOVERED_FILE    = os.path.join(BASE_DIR, "data", "discovered_artists.json")
 RECENT_FILE        = os.path.join(BASE_DIR, "data", "recent_tracks.json")
 LOCK_FILE          = os.path.join(BASE_DIR, "data", "dj.lock")
 BANNED_FILE        = os.path.join(BASE_DIR, "data", "banned_tracks.json")
+BANNED_ARTISTS_FILE = os.path.join(BASE_DIR, "data", "banned_artists.json")
 CACHE_TTL_DAYS     = 7
 
 MEMORY_VERSION = 1
@@ -230,12 +231,6 @@ def ban_current_track():
             save_banned()
             print(f"  Banned: '{name}' (ID: {track_id})")
 
-        # Weight penalty — banning is a stronger dislike signal than just skipping
-        artist = now_playing.get("artist")
-        mode   = now_playing.get("mode")
-        if artist and mode:
-            update_weight(artist, mode, WEIGHT_PUNISH)
-
         # Skip immediately — play next track in current mode.
         # interrupted=False because the weight penalty was already applied
         # above; passing interrupted=True would cause judge_last_track()
@@ -251,6 +246,87 @@ def ban_current_track():
 load_banned()
 
 # =====================
+# BAN ARTIST SYSTEM
+# =====================
+
+banned_artist_names = set()
+
+def load_banned_artists():
+    """Load banned artist names from disk."""
+    global banned_artist_names
+    if os.path.exists(BANNED_ARTISTS_FILE):
+        try:
+            with open(BANNED_ARTISTS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            banned_artist_names = set(data.get("artist_names", []))
+            if banned_artist_names:
+                print(f"  Loaded {len(banned_artist_names)} banned artist(s).")
+        except Exception:
+            banned_artist_names = set()
+
+def save_banned_artists():
+    with open(BANNED_ARTISTS_FILE, "w", encoding="utf-8") as f:
+        json.dump({"artist_names": list(banned_artist_names)}, f, indent=2)
+
+def ban_current_artist():
+    """
+    Ban the currently playing artist if they are a discovered artist.
+    Permanent pool artists cannot be banned this way.
+    Removes them from all pools, weights, track cache, and discovered_artists.
+    Adds them to banned_artist_names so they can never be re-discovered.
+    """
+    artist = now_playing.get("artist")
+    if not artist:
+        print("  Ban artist: nothing is currently playing.")
+        return
+
+    # Only allow banning discovered artists, not permanent pool artists
+    if artist not in discovered_artists:
+        print(f"  Ban artist: '{artist}' is a permanent pool artist and cannot be banned this way.")
+        return
+
+    print(f"  Banning artist: '{artist}'")
+
+    # Remove from discovered_artists and save
+    del discovered_artists[artist]
+    save_discovered(discovered_artists)
+
+    # Remove from ARTISTS dict
+    ARTISTS.pop(artist, None)
+
+    # Remove from all mode pools and global pool
+    for pool in MODE_POOLS.values():
+        if artist in pool:
+            pool.remove(artist)
+    if artist in GLOBAL_POOL:
+        GLOBAL_POOL.remove(artist)
+
+    # Remove from all weight modes in memory
+    for mode_weights in memory["modes"].values():
+        mode_weights.pop(artist, None)
+    save_memory(memory)
+
+    # Remove from track cache
+    if artist in track_disk_cache:
+        del track_disk_cache[artist]
+        save_track_cache()
+    artist_cache.pop(artist, None)
+
+    # Add to banned artists so discovery never re-adds them
+    banned_artist_names.add(artist)
+    save_banned_artists()
+
+    print(f"  '{artist}' permanently banned and removed from all pools.")
+
+    # Skip to next track immediately
+    if auto_mode == "global":
+        play_global_mix(interrupted=False, banned=True)
+    elif current_pool:
+        play_from_pool(current_pool, auto_mode, interrupted=False, banned=True)
+
+load_banned_artists()
+
+# =====================
 # INSTANCE LOCK
 # =====================
 
@@ -260,7 +336,6 @@ def acquire_lock():
     PID in it belongs to a running process, exit immediately so we don't
     run two instances at once.
     """
-    import sys
     if os.path.exists(LOCK_FILE):
         try:
             with open(LOCK_FILE, "r") as f:
@@ -667,6 +742,9 @@ def discover_new_artist(seed_artist, mode):
     for entry in similar:
         name = entry.get("name", "").strip()
         if not name or name in known_names:
+            continue
+        if name in banned_artist_names:
+            print(f"  Discovery: '{name}' is banned, skipping.")
             continue
 
         print(f"  Discovery: trying candidate '{name}'...")
@@ -1278,6 +1356,9 @@ def run_dj():
 
             elif choice == "ban":
                 ban_current_track()
+
+            elif choice == "ban-artist":
+                ban_current_artist()
 
             elif choice == "1":
                 auto_mode    = "american_rap"

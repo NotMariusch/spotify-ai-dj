@@ -165,13 +165,15 @@ def handle_command(data):
     if cmd == "ai-mode":
         return  # UI-only, no action
 
-    if cmd in ("skip", "ban", "quit") or cmd in ("1", "2", "3", "4", "5"):
+    if cmd in ("skip", "ban", "ban-artist", "quit") or cmd in ("1", "2", "3", "4", "5"):
         send_command(cmd)
         if cmd in mode_labels:
             state["mode"]           = mode_labels[cmd]
             state["current_artist"] = "—"
             state["current_track"]  = "—"
             voice_log_queue.put(f"→ Switched to {mode_labels[cmd]} mode")
+        elif cmd == "ban-artist":
+            voice_log_queue.put(f"→ Banning current artist...")
         else:
             voice_log_queue.put(f"→ Command sent: {cmd}")
 

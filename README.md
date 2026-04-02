@@ -23,6 +23,7 @@ SpotifyDJ/
 │   ├── dj.lock                  # Instance lock file (prevents duplicate processes)
 │   ├── dj_input.txt             # Hotkey/chat input (written by AHK, dj_chat.py, or dj_voice.py)
 │   ├── banned_tracks.json       # Permanently banned track IDs
+│   ├── banned_artists.json      # Permanently banned discovered artist names
 │   └── dj_crash.log            # Crash and exit log
 ├── .cache                       # Spotify OAuth token for dj_server.py (gitignored)
 ├── .cache-dj                    # Spotify OAuth token for spotify_dj.py (gitignored)
@@ -49,6 +50,8 @@ SpotifyDJ/
 - **Persistent track cache** — fetches each artist's catalog once and caches it for 7 days, keeping API calls near zero during normal use
 - **Persistent recent history** — remembers recently played tracks across restarts to avoid immediate repeats
 - **Skip hotkey** — F13+6 skips the current track, applies the correct weight penalty, and immediately picks the next track from the active mode's pool
+- **Ban track** — F13+8 permanently bans the current track. It will never be played again. Does not affect artist weight
+- **Ban artist** — F13+7 permanently bans the current discovered artist. Removes them from all pools, weights, and track cache and prevents re-discovery. Only works on discovered artists, not permanent pool artists
 - **Duplicate instance protection** — lock file prevents two instances running simultaneously
 - **Crash recovery** — automatically restarts after unhandled exceptions and logs all crashes and exits to `data/dj_crash.log`
 
@@ -133,7 +136,11 @@ You: play some current pop hits
 You: I want chill anime music
 You: give me hype rap
 You: something dark and moody
+You: Ado                          ← plays only Ado
+You: Ado and Eve                  ← plays only those two artists
 ```
+
+When you name one or more specific artists, the DJ plays only those artists. When you describe a vibe, genre, or mood, the DJ asks Claude to pick 5–8 matching artists.
 
 The DJ will ask Claude for matching artists, search Spotify for each one, and start playing from that pool continuously. AI plays never affect your weight system — your carefully tuned weights are completely unaffected.
 
@@ -178,6 +185,7 @@ Requires AutoHotkey v2 running `scripts/dj_hotkey.ahk`. Right Ctrl is remapped t
 | F13 + 4 | J-Pop mode (Ado, YOASOBI, Eve, BABYMETAL, Aimer) |
 | F13 + 5 | Global mode (all artists, weighted random) |
 | F13 + 6 | Skip current track |
+| F13 + 7 | Ban current artist permanently (discovered artists only) |
 | F13 + 8 | Ban current track permanently |
 | F13 + 9 | Quit DJ cleanly |
 | F13 + V | Toggle voice recording (via dj_voice.py) |
@@ -189,10 +197,12 @@ Each artist starts at weight `1.0` per mode. At every track boundary the DJ judg
 | Condition | Weight change |
 |-----------|--------------|
 | Played 80%+ naturally | +0.15 |
-| Skipped or banned in first 25% | -0.10 |
+| Skipped in first 25% | -0.10 |
 | Switched between 25–80% | No change |
 | Mode switch (any point) | No change |
 | AI mode play (any point) | No change |
+| Track banned (any point) | No change |
+| Artist banned | Removed entirely |
 
 Weights are clamped between `0.2` (floor) and `3.0` (ceiling). `weighted_choice()` uses these as probabilities so higher-weight artists get picked more often without ever fully excluding lower-weight ones.
 
@@ -216,7 +226,8 @@ Trial artists need 5 play-throughs of 80%+ to graduate. Graduated artists are pe
 | `dj_memory.json` | Artist weights per mode | Yes — all weights reset to 1.0. Also delete if you rename modes, as old mode keys become orphaned |
 | `recent_tracks.json` | Recently played titles | Yes — repeat protection clears |
 | `discovered_artists.json` | Discovered/graduated artists | Yes — discovery history lost |
-| `banned_tracks.json` | Permanently banned track IDs | Yes — all bans cleared |
+| `banned_tracks.json` | Permanently banned track IDs | Yes — all track bans cleared |
+| `banned_artists.json` | Permanently banned discovered artist names | Yes — all artist bans cleared, banned artists may be re-discovered |
 | `dj_crash.log` | Crash and exit log | Yes — safe to delete anytime |
 | `.cache` | Spotify token for dj_server.py | Yes — re-authorized automatically on next start |
 | `.cache-dj` | Spotify token for spotify_dj.py | Yes — requires one-time manual reauth (see Setup step 9) |

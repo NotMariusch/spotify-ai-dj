@@ -22,11 +22,15 @@ import tempfile
 import wave
 import json as _json
 import urllib.request
+import platform
 import numpy as np
 import sounddevice as sd
 import speech_recognition as sr
-import keyboard
 from pathlib import Path
+
+IS_LINUX = platform.system() == "Linux"
+if not IS_LINUX:
+    import keyboard
 
 BASE_DIR   = Path(__file__).resolve().parent.parent
 INPUT_FILE = BASE_DIR / "data" / "dj_input.txt"
@@ -160,16 +164,34 @@ def main():
     print("=" * 50)
     print()
 
-    keyboard.add_hotkey("f13+v", on_hotkey, suppress=True)
-
-    print("  Listening for F13+V...")
-    print()
-
-    try:
-        keyboard.wait()
-    except KeyboardInterrupt:
-        print("\nClosing voice mode.")
-        sys.exit(0)
+    if IS_LINUX:
+        # On Linux, keyboard library requires root. Instead we watch
+        # dj_input.txt for "voice-toggle" written by dj_hotkey_linux.py
+        print("  Listening for voice-toggle command (via dj_hotkey_linux.py)...")
+        print()
+        try:
+            while True:
+                if INPUT_FILE.exists():
+                    try:
+                        content = INPUT_FILE.read_text().strip()
+                        if content == "voice-toggle":
+                            INPUT_FILE.unlink()
+                            on_hotkey()
+                    except Exception:
+                        pass
+                time.sleep(0.1)
+        except KeyboardInterrupt:
+            print("\nClosing voice mode.")
+            sys.exit(0)
+    else:
+        keyboard.add_hotkey("f13+v", on_hotkey, suppress=True)
+        print("  Listening for F13+V...")
+        print()
+        try:
+            keyboard.wait()
+        except KeyboardInterrupt:
+            print("\nClosing voice mode.")
+            sys.exit(0)
 
 
 if __name__ == "__main__":

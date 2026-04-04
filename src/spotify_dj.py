@@ -334,21 +334,23 @@ def acquire_lock():
     """
     Write our PID to the lock file. If a lock file already exists and the
     PID in it belongs to a running process, exit immediately so we don't
-    run two instances at once.
+    run two instances at once. Works on both Windows and Linux.
     """
     if os.path.exists(LOCK_FILE):
         try:
             with open(LOCK_FILE, "r") as f:
                 existing_pid = int(f.read().strip())
-            # Check if that process is still alive
-            import ctypes
-            handle = ctypes.windll.kernel32.OpenProcess(0x0400, False, existing_pid)
-            if handle:
-                ctypes.windll.kernel32.CloseHandle(handle)
-                print(f"DJ is already running (PID {existing_pid}). Exiting.")
-                sys.exit(0)
-        except Exception:
+            # Cross-platform process check using os.kill with signal 0
+            # signal 0 doesn't kill the process, just checks if it exists
+            os.kill(existing_pid, 0)
+            print(f"DJ is already running (PID {existing_pid}). Exiting.")
+            sys.exit(0)
+        except (ProcessLookupError, ValueError):
             pass  # stale or unreadable lock — safe to overwrite
+        except PermissionError:
+            # Process exists but we can't signal it — treat as running
+            print(f"DJ appears to already be running. Exiting.")
+            sys.exit(0)
 
     with open(LOCK_FILE, "w") as f:
         f.write(str(os.getpid()))

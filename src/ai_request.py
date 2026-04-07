@@ -122,12 +122,15 @@ def resolve_artists_to_ids(sp, artist_names: list[str], known_artists: dict) -> 
 
         # Search Spotify for unknown artists
         try:
-            results = sp.search(q=f"artist:{name}", type="artist", limit=1)
+            results = sp.search(q=name, type="artist", limit=1)
             items = results.get("artists", {}).get("items", [])
             if items:
                 found = items[0]
-                print(f"  AI artist (found on Spotify): {found['name']} (searched: {name})")
-                resolved.append((found["name"], found["id"]))
+                if found["name"].lower() != name.lower():
+                    print(f"  AI artist (name mismatch): Spotify returned '{found['name']}' for '{name}' — skipping")
+                else:
+                    print(f"  AI artist (found on Spotify): {found['name']} (searched: {name})")
+                    resolved.append((found["name"], found["id"]))
             else:
                 print(f"  AI artist (not found on Spotify): {name} — skipping")
         except Exception as e:

@@ -934,6 +934,9 @@ def is_alternate_version(track):
     for kw in ALBUM_KEYWORDS_SUBSTR:
         if kw in album_text:
             return True
+    for kw in ALBUM_KEYWORDS_WORD:
+        if re.search(rf"\b{re.escape(kw)}\b", track_text):
+            return True
     return False
 
 def normalize_title(title):
@@ -999,6 +1002,9 @@ def fetch_artist_tracks_by_id(artist_name, artist_id):
                 continue
             seen.add(album["id"])
             for t in sp.album_tracks(album["id"], limit=50)["items"]:
+                track_artist_ids = {a["id"] for a in t.get("artists", [])}
+                if artist_id not in track_artist_ids:
+                    continue
                 t["album"] = album
                 t.setdefault("popularity", 0)
                 t.setdefault("explicit", False)
